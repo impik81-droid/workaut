@@ -203,7 +203,7 @@
             cursor: pointer;
         }
         .completed {
-            opacity: 0.6; /* Убрано зачеркивание, осталась только легкая прозрачность */
+            opacity: 0.6;
         }
         .video-container {
             margin-top: 10px;
@@ -296,6 +296,11 @@
             font-size: 12px;
             cursor: pointer;
         }
+        .loading-text {
+            font-size: 12px;
+            color: var(--hint-color);
+            margin-bottom: 8px;
+        }
     </style>
 </head>
 <body>
@@ -386,16 +391,17 @@
         let selectedDate = getTodayStr();
         let activeProgramId = programData[0].id;
 
-        const sessionVideos = {};
-        const sessionFiles = {};
-
         function getStorage() {
-            const data = localStorage.getItem('workout_app_v5');
-            return data ? JSON.parse(data) : { dates: {}, templates: {}, comments: {} };
+            const data = localStorage.getItem('workout_app_v6');
+            return data ? JSON.parse(data) : { dates: {}, templates: {}, comments: {}, videos: {} };
         }
 
         function saveStorage(data) {
-            localStorage.setItem('workout_app_v5', JSON.stringify(data));
+            try {
+                localStorage.setItem('workout_app_v6', JSON.stringify(data));
+            } catch (e) {
+                alert("Память телефона переполнена! Видео слишком большое для сохранения в браузер.");
+            }
         }
 
         window.changeDate = function(newDate) {
@@ -471,7 +477,7 @@
                 }
 
                 const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
-                const videoSrc = sessionVideos[itemKey] || '';
+                const videoSrc = db.videos ? db.videos[itemKey] : '';
                 
                 let videoBlock = '';
                 if (videoSrc) {
@@ -490,7 +496,7 @@
                         <div class="video-container">
                             <video class="video-preview" controls playsinline src="${videoSrc}"></video>
                             <div class="video-actions">
-                                <button class="action-btn" onclick="saveToPhoneGallery(${exIndex})">💾 Сохранить</button>
+                                <button class="action-btn" onclick="saveToPhoneGallery('${itemKey}')">💾 Скачать</button>
                                 <button class="action-btn delete" onclick="deleteVideo(${exIndex})">🗑 Удалить видео</button>
                             </div>
                             <div class="comments-section">
@@ -506,7 +512,7 @@
                 }
 
                 let videoBtnHtml = `
-                    <label class="video-btn-label">
+                    <label class="video-btn-label" id="label_${exIndex}">
                         📷 ${videoSrc ? 'Заменить видео' : 'Загрузить видео'}
                         <input type="file" accept="video/*" onchange="handleVideo(event, ${exIndex})">
                     </label>
@@ -562,43 +568,44 @@
         window.handleVideo = function(event, exIndex) {
             const file = event.target.files[0];
             if (!file) return;
-            const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
-            sessionVideos[itemKey] = URL.createObjectURL(file);
-            sessionFiles[itemKey] = file;
-            renderWorkouts();
+
+            const label = document.getElementById(`label_${exIndex}`);
+            label.innerText = "⏳ Загрузка...";
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const base64String = e.target.result;
+                const db = getStorage();
+                if (!db.videos) db.videos = {};
+                const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
+                db.videos[itemKey] = base64String;
+                saveStorage(db);
+                renderWorkouts();
+            };
+            reader.readAsDataURL(file);
         }
 
         window.deleteVideo = function(exIndex) {
+            const db = getStorage();
             const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
-            delete sessionVideos[itemKey];
-            delete sessionFiles[itemKey];
+            if (db.videos) {
+                delete db.videos[itemKey];
+                saveStorage(db);
+            }
             renderWorkouts();
         }
 
-        window.saveToPhoneGallery = async function(exIndex) {
-            const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
-            const file = sessionFiles[itemKey];
-            if (!file) return;
+        window.saveToPhoneGallery = function(itemKey) {
+            const db = getStorage();
+            const videoSrc = db.videos ? db.videos[itemKey] : '';
+            if (!videoSrc) return;
 
-            if (navigator.canShare && navigator.canShare({ files: [file] })) {
-                try {
-                    await navigator.share({
-                        files: [file],
-                        title: 'Видео тренировки'
-                    });
-                } catch (err) {
-                    if (err.name !== 'AbortError') {
-                        console.log("Ошибка шаринга:", err);
-                    }
-                }
-            } else {
-                const a = document.createElement('a');
-                a.href = sessionVideos[itemKey];
-                a.download = `workout_${selectedDate}_${exIndex}.mp4`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-            }
+            const a = document.createElement('a');
+            a.href = videoSrc;
+            a.download = `workout_${selectedDate}.mp4`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
         }
 
         window.addComment = function(exIndex) {
