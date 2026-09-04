@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Дневник тренировок</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        :root {
+            --bg-color: var(--tg-theme-bg-color, #f4f4f5);
+            --text-color: var(--tg-theme-text-color, #18181b);
+            --card-bg: var(--tg-theme-secondary-bg-color, #ffffff);
+            --button-color: var(--tg-theme-button-color, #3b82f6);
+            --button-text: var(--tg-theme-button-text-color, #ffffff);
+            --hint-color: var(--tg-theme-hint-color, #71717a);
+            --success-color: #22c55e;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 16px;
+            box-sizing: border-box;
+            padding-bottom: 40px;
+        }
+        h1 {
+            font-size: 20px;
+            margin-bottom: 12px;
+            text-align: center;
+        }
+        .calendar-section {
+            background-color: var(--card-bg);
+            border-radius: 12px;
+            padding: 12px;
+            margin-bottom: 16px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        .date-picker-row {
+            margin-bottom: 10px;
+        }
+        .date-picker-row input[type="date"] {
+            padding: 6px 10px;
+            border: 1px solid var(--hint-color);
+            border-radius: 6px;
+            background: transparent;
+            color: var(--text-color);
+            font-size: 14px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .program-selector {
+            margin-bottom: 4px;
+        }
+        .program-label {
+            font-size: 13px;
+            color: var(--hint-color);
+            margin-bottom: 6px;
+            display: block;
+        }
+        .tabs {
+            display: flex;
+            gap: 6px;
+            overflow-x: auto;
+            padding-bottom: 4px;
+        }
+        .tab {
+            background-color: var(--bg-color);
+            border: 1px solid var(--hint-color);
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            white-space: nowrap;
+            flex-shrink: 0;
+            color: var(--text-color);
+        }
+        .tab.active {
+            background-color: var(--button-color);
+            color: var(--button-text);
+            border-color: transparent;
+            font-weight: 600;
+        }
+        .exercise-card {
+            background-color: var(--card-bg);
+            border-radius: 12px;
+            padding: 14px;
+            margin-bottom: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        .exercise-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 4px;
+        }
+        .exercise-title {
+            font-size: 15px;
+            font-weight: 600;
+        }
+        .video-btn-label {
+            font-size: 12px;
+            background: rgba(128, 128, 128, 0.1);
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            color: var(--button-color);
+            white-space: nowrap;
+        }
+        .video-btn-label input {
+            display: none;
+        }
+        .exercise-meta {
+            font-size: 12px;
+            color: var(--hint-color);
+            margin-bottom: 10px;
+        }
+        .sets-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-bottom: 10px;
+        }
+        .set-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(128, 128, 128, 0.04);
+            padding: 6px 8px;
+            border-radius: 6px;
+        }
+        .set-label {
+            font-size: 12px;
+            font-weight: 500;
+            width: 55px;
+        }
+        .set-input {
+            flex: 1;
+            padding: 6px;
+            border: 1px solid var(--hint-color);
+            border-radius: 4px;
+            background: transparent;
+            color: var(--text-color);
+            font-size: 13px;
+            text-align: center;
+            min-width: 0;
+        }
+        .set-checkbox {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+        .completed {
+            opacity: 0.6;
+            text-decoration: line-through;
+        }
+        .video-container {
+            margin-top: 10px;
+            border-top: 1px solid rgba(128, 128, 128, 0.2);
+            padding-top: 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .video-preview {
+            width: 100%;
+            max-width: 260px; /* Ограничиваем ширину, чтобы вертикальное видео выглядело компактно */
+            aspect-ratio: 9 / 16; /* Строго вертикальный формат */
+            border-radius: 8px;
+            object-fit: cover;
+            margin-bottom: 8px;
+            background: #000;
+            display: block;
+        }
+        .video-actions {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 8px;
+            width: 100%;
+            justify-content: center;
+        }
+        .action-btn {
+            background-color: rgba(128, 128, 128, 0.1);
+            color: var(--text-color);
+            border: none;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            font-weight: 500;
+        }
+        .comments-section {
+            background: rgba(128, 128, 128, 0.03);
+            border-radius: 8px;
+            padding: 8px;
+            margin-top: 8px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .comments-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--hint-color);
+            margin-bottom: 6px;
+        }
+        .comment-item {
+            font-size: 13px;
+            background: var(--card-bg);
+            border: 1px solid rgba(128, 128, 128, 0.15);
+            padding: 6px 8px;
+            border-radius: 6px;
+            margin-bottom: 6px;
+        }
+        .comment-author {
+            font-size: 10px;
+            color: var(--button-color);
+            font-weight: bold;
+            margin-bottom: 2px;
+        }
+        .comment-input-row {
+            display: flex;
+            gap: 6px;
+            margin-top: 6px;
+        }
+        .comment-input {
+            flex: 1;
+            padding: 6px;
+            border: 1px solid var(--hint-color);
+            border-radius: 4px;
+            background: transparent;
+            color: var(--text-color);
+            font-size: 12px;
+        }
+        .comment-send-btn {
+            background-color: var(--button-color);
+            color: var(--button-text);
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Дневник тренировок</h1>
+
+    <div class="calendar-section">
+        <div class="date-picker-row">
+            <input type="date" id="workoutDate" onchange="changeDate(this.value)">
+        </div>
+        <div class="program-selector">
+            <span class="program-label">Выберите шаблон тренировки:</span>
+            <div class="tabs" id="tabsContainer"></div>
+        </div>
+    </div>
+
+    <div id="workoutsContainer"></div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.ready();
+        tg.expand();
+
+        const programData = [
+            { id: "day1", name: "День 1 (Квадры)", exercises: [
+                { name: "Сгибание ног сидя или лежа", sets: 3, target: "15 повторений" },
+                { name: "Гак-присед", sets: 3, target: "12 повторений" },
+                { name: "Жим ногами широко низко", sets: 3, target: "12 повторений" },
+                { name: "Присед в Смите коленодомин.", sets: 3, target: "10-12 повторений" },
+                { name: "Разгибание ног", sets: 3, target: "12 повторений" }
+            ]},
+            { id: "day2", name: "День 2 (Спина)", exercises: [
+                { name: "Подтягивание в гравитроне ш.хв.", sets: 3, target: "12 повторений" },
+                { name: "Тяга штанги в наклоне прямым хв.", sets: 3, target: "10-12 повторений" },
+                { name: "Тяга горизонтального Хаммера к груди", sets: 3, target: "12 повторений" },
+                { name: "Тяга Вертикальная Шир.хв. (прожатие)", sets: 3, target: "15 повторений" },
+                { name: "Тяга каната ко лбу", sets: 3, target: "15 повторений" }
+            ]},
+            { id: "day3", name: "День 3 (Ягодицы / Низ)", exercises: [
+                { name: "Сгибание ног Сидя/лежа", sets: 3, target: "12 повторений" },
+                { name: "Жим ногами высоко узко", sets: 3, target: "12 повторений" },
+                { name: "Ягодичный мост", sets: 3, target: "12 повторений" },
+                { name: "Румынская тяга", sets: 3, target: "12 повторений" },
+                { name: "Жим одной ногой высоко", sets: 3, target: "15 повторений" }
+            ]},
+            { id: "day4", name: "День 4 (Плечи / Грудь / Руки)", exercises: [
+                { name: "Отведение гантелей в стороны", sets: 3, target: "12 повторений" },
+                { name: "Протяжка с грифом", sets: 3, target: "12 повторений" },
+                { name: "Жим штанги сидя", sets: 3, target: "12 повторений" },
+                { name: "Отжимание на полу (руки узко)", sets: 3, target: "12-15 повторений" },
+                { name: "Разгибание рук с прям. рукояткой", sets: 3, target: "12-15 повторений" }
+            ]}
+        ];
+
+        const getTodayStr = () => {
+            const d = new Date();
+            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        };
+
+        let selectedDate = getTodayStr();
+        let activeProgramId = programData[0].id;
+
+        const sessionVideos = {};
+        const sessionFiles = {};
+
+        function getStorage() {
+            const data = localStorage.getItem('workout_app_v5');
+            return data ? JSON.parse(data) : { dates: {}, templates: {}, comments: {} };
+        }
+
+        function saveStorage(data) {
+            localStorage.setItem('workout_app_v5', JSON.stringify(data));
+        }
+
+        document.getElementById('workoutDate').value = selectedDate;
+
+        window.changeDate = function(newDate) {
+            if (!newDate) return;
+            selectedDate = newDate;
+            const db = getStorage();
+            if (db.dates[selectedDate] && db.dates[selectedDate].programId) {
+                activeProgramId = db.dates[selectedDate].programId;
+            }
+            renderTabs();
+            renderWorkouts();
+        }
+
+        function setProgram(progId) {
+            activeProgramId = progId;
+            const db = getStorage();
+            if (!db.dates[selectedDate]) db.dates[selectedDate] = {};
+            db.dates[selectedDate].programId = progId;
+            saveStorage(db);
+            renderTabs();
+            renderWorkouts();
+        }
+
+        function getLastData(progId, exIndex, setIndex) {
+            const db = getStorage();
+            if (db.templates[progId] && db.templates[progId][exIndex] && db.templates[progId][exIndex][setIndex]) {
+                return db.templates[progId][exIndex][setIndex];
+            }
+            return { weight: '', reps: '', checked: false };
+        }
+
+        function renderTabs() {
+            const container = document.getElementById('tabsContainer');
+            container.innerHTML = '';
+            programData.forEach(prog => {
+                const btn = document.createElement('div');
+                btn.className = `tab ${prog.id === activeProgramId ? 'active' : ''}`;
+                btn.innerText = prog.name;
+                btn.onclick = () => setProgram(prog.id);
+                container.appendChild(btn);
+            });
+        }
+
+        function renderWorkouts() {
+            const container = document.getElementById('workoutsContainer');
+            container.innerHTML = '';
+            
+            const db = getStorage();
+            if (!db.dates[selectedDate]) db.dates[selectedDate] = { programId: activeProgramId };
+            
+            const dayData = db.dates[selectedDate][activeProgramId] || {};
+            const currentProgram = programData.find(p => p.id === activeProgramId) || programData[0];
+
+            currentProgram.exercises.forEach((ex, exIndex) => {
+                const card = document.createElement('div');
+                card.className = 'exercise-card';
+
+                let setsHtml = '';
+                for (let s = 0; s < ex.sets; s++) {
+                    const setKey = `set_${s}`;
+                    let setData = dayData[exIndex] && dayData[exIndex][setKey] 
+                        ? dayData[exIndex][setKey] 
+                        : getLastData(activeProgramId, exIndex, s);
+
+                    setsHtml += `
+                        <div class="set-row ${setData.checked ? 'completed' : ''}" id="row_${exIndex}_${s}">
+                            <span class="set-label">Подход ${s + 1}</span>
+                            <input type="number" class="set-input" placeholder="Вес" value="${setData.weight || ''}" oninput="updateData(${exIndex}, ${s}, 'weight', this.value)">
+                            <input type="number" class="set-input" placeholder="Повт" value="${setData.reps || ''}" oninput="updateData(${exIndex}, ${s}, 'reps', this.value)">
+                            <input type="checkbox" class="set-checkbox" ${setData.checked ? 'checked' : ''} onchange="toggleCheck(${exIndex}, ${s}, this.checked)">
+                        </div>
+                    `;
+                }
+
+                const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
+                const videoSrc = sessionVideos[itemKey] || '';
+                
+                let videoBlock = '';
+                if (videoSrc) {
+                    const commentsList = db.comments[itemKey] || [];
+                    let commentsHtml = '';
+                    commentsList.forEach((c) => {
+                        commentsHtml += `
+                            <div class="comment-item">
+                                <div class="comment-author">${c.author}</div>
+                                <div>${c.text}</div>
+                            </div>
+                        `;
+                    });
+
+                    videoBlock = `
+                        <div class="video-container">
+                            <video class="video-preview" controls playsinline src="${videoSrc}"></video>
+                            <div class="video-actions">
+                                <button class="action-btn" onclick="saveToPhoneGallery(${exIndex})">💾 Сохранить в галерею</button>
+                            </div>
+                            <div class="comments-section">
+                                <div class="comments-title">Комментарии к технике:</div>
+                                <div id="commentsList_${exIndex}">${commentsHtml}</div>
+                                <div class="comment-input-row">
+                                    <input type="text" class="comment-input" id="commInput_${exIndex}" placeholder="Написать комментарий...">
+                                    <button class="comment-send-btn" onclick="addComment(${exIndex})">Отправить</button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                let videoBtnHtml = `
+                    <label class="video-btn-label">
+                        📷 ${videoSrc ? 'Заменить видео' : 'Загрузить видео'}
+                        <input type="file" accept="video/*" onchange="handleVideo(event, ${exIndex})">
+                    </label>
+                `;
+
+                card.innerHTML = `
+                    <div class="exercise-header">
+                        <div class="exercise-title">${ex.name}</div>
+                        ${videoBtnHtml}
+                    </div>
+                    <div class="exercise-meta">План: ${ex.target}</div>
+                    <div class="sets-grid">${setsHtml}</div>
+                    ${videoBlock}
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        window.updateData = function(exIndex, setIndex, field, value) {
+            const db = getStorage();
+            if (!db.dates[selectedDate][activeProgramId]) db.dates[selectedDate][activeProgramId] = {};
+            if (!db.dates[selectedDate][activeProgramId][exIndex]) db.dates[selectedDate][activeProgramId][exIndex] = {};
+            if (!db.dates[selectedDate][activeProgramId][exIndex][`set_${setIndex}`]) {
+                db.dates[selectedDate][activeProgramId][exIndex][`set_${setIndex}`] = { weight: '', reps: '', checked: false };
+            }
+
+            db.dates[selectedDate][activeProgramId][exIndex][`set_${setIndex}`][field] = value;
+
+            if (!db.templates[activeProgramId]) db.templates[activeProgramId] = {};
+            if (!db.templates[activeProgramId][exIndex]) db.templates[activeProgramId][exIndex] = {};
+            if (!db.templates[activeProgramId][exIndex][setIndex]) db.templates[activeProgramId][exIndex][setIndex] = {};
+            db.templates[activeProgramId][exIndex][setIndex][field] = value;
+
+            saveStorage(db);
+        }
+
+        window.toggleCheck = function(exIndex, setIndex, isChecked) {
+            const db = getStorage();
+            if (!db.dates[selectedDate][activeProgramId]) db.dates[selectedDate][activeProgramId] = {};
+            if (!db.dates[selectedDate][activeProgramId][exIndex]) db.dates[selectedDate][activeProgramId][exIndex] = {};
+            if (!db.dates[selectedDate][activeProgramId][exIndex][`set_${setIndex}`]) {
+                db.dates[selectedDate][activeProgramId][exIndex][`set_${setIndex}`] = { weight: '', reps: '', checked: false };
+            }
+
+            db.dates[selectedDate][activeProgramId][exIndex][`set_${setIndex}`].checked = isChecked;
+            saveStorage(db);
+
+            const row = document.getElementById(`row_${exIndex}_${setIndex}`);
+            if (isChecked) row.classList.add('completed');
+            else row.classList.remove('completed');
+        }
+
+        window.handleVideo = function(event, exIndex) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
+            sessionVideos[itemKey] = URL.createObjectURL(file);
+            sessionFiles[itemKey] = file;
+            renderWorkouts();
+        }
+
+        window.saveToPhoneGallery = async function(exIndex) {
+            const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
+            const file = sessionFiles[itemKey];
+            if (!file) return;
+
+            if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                try {
+                    await navigator.share({
+                        files: [file],
+                        title: 'Видео тренировки'
+                    });
+                } catch (err) {
+                    if (err.name !== 'AbortError') {
+                        console.log("Ошибка шаринга:", err);
+                    }
+                }
+            } else {
+                const a = document.createElement('a');
+                a.href = sessionVideos[itemKey];
+                a.download = `workout_${selectedDate}_${exIndex}.mp4`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            }
+        }
+
+        window.addComment = function(exIndex) {
+            const input = document.getElementById(`commInput_${exIndex}`);
+            const text = input.value.trim();
+            if (!text) return;
+
+            const db = getStorage();
+            const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
+            if (!db.comments[itemKey]) db.comments[itemKey] = [];
+
+            const user = tg.initDataUnsafe?.user;
+            const authorName = user && user.first_name ? user.first_name : "Тренер / Ученик";
+
+            db.comments[itemKey].push({
+                author: authorName,
+                text: text
+            });
+
+            saveStorage(db);
+            input.value = '';
+            renderWorkouts();
+        }
+
+        renderTabs();
+        renderWorkouts();
+    </script>
+</body>
+</html>
