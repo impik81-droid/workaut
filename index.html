@@ -14,6 +14,7 @@
             --button-text: var(--tg-theme-button-text-color, #ffffff);
             --hint-color: var(--tg-theme-hint-color, #71717a);
             --success-color: #22c55e;
+            --danger-color: #ef4444;
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -164,8 +165,8 @@
         }
         .video-preview {
             width: 100%;
-            max-width: 260px; /* Ограничиваем ширину, чтобы вертикальное видео выглядело компактно */
-            aspect-ratio: 9 / 16; /* Строго вертикальный формат */
+            max-width: 260px;
+            aspect-ratio: 9 / 16;
             border-radius: 8px;
             object-fit: cover;
             margin-bottom: 8px;
@@ -178,6 +179,7 @@
             margin-bottom: 8px;
             width: 100%;
             justify-content: center;
+            flex-wrap: wrap;
         }
         .action-btn {
             background-color: rgba(128, 128, 128, 0.1);
@@ -188,6 +190,10 @@
             font-size: 12px;
             cursor: pointer;
             font-weight: 500;
+        }
+        .action-btn.delete {
+            background-color: rgba(239, 68, 68, 0.1);
+            color: var(--danger-color);
         }
         .comments-section {
             background: rgba(128, 128, 128, 0.03);
@@ -408,7 +414,8 @@
                         <div class="video-container">
                             <video class="video-preview" controls playsinline src="${videoSrc}"></video>
                             <div class="video-actions">
-                                <button class="action-btn" onclick="saveToPhoneGallery(${exIndex})">💾 Сохранить в галерею</button>
+                                <button class="action-btn" onclick="saveToPhoneGallery(${exIndex})">💾 Сохранить</button>
+                                <button class="action-btn delete" onclick="deleteVideo(${exIndex})">🗑 Удалить видео</button>
                             </div>
                             <div class="comments-section">
                                 <div class="comments-title">Комментарии к технике:</div>
@@ -482,6 +489,13 @@
             const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
             sessionVideos[itemKey] = URL.createObjectURL(file);
             sessionFiles[itemKey] = file;
+            renderWorkouts();
+        }
+
+        window.deleteVideo = function(exIndex) {
+            const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
+            delete sessionVideos[itemKey];
+            delete sessionFiles[itemKey];
             renderWorkouts();
         }
 
