@@ -30,7 +30,6 @@
             margin-bottom: 12px;
             text-align: center;
         }
-        /* Стили экрана блокировки */
         #lockScreen {
             display: flex;
             flex-direction: column;
@@ -79,7 +78,6 @@
             margin-top: 8px;
             min-height: 16px;
         }
-        /* Основной контент (скрыт по умолчанию) */
         #appContent {
             display: none;
         }
@@ -205,8 +203,7 @@
             cursor: pointer;
         }
         .completed {
-            opacity: 0.6;
-            text-decoration: line-through;
+            opacity: 0.6; /* Убрано зачеркивание, осталась только легкая прозрачность */
         }
         .video-container {
             margin-top: 10px;
@@ -303,7 +300,6 @@
 </head>
 <body>
 
-    <!-- Экран ввода пароля -->
     <div id="lockScreen">
         <div class="lock-card">
             <h1>🔒 Вход</h1>
@@ -314,7 +310,6 @@
         </div>
     </div>
 
-    <!-- Основное приложение -->
     <div id="appContent">
         <h1>Дневник тренировок</h1>
 
@@ -336,7 +331,6 @@
         tg.ready();
         tg.expand();
 
-        // 🔑 УСТАНОВИТЕ СВОЙ ПАРОЛЬ ЗДЕСЬ
         const APP_PASSWORD = "1234";
 
         function checkPassword() {
@@ -352,13 +346,6 @@
                 document.getElementById('pinInput').value = '';
             }
         }
-
-        // Автоматический вход, если уже вводили (опционально, раскомментируйте, если не хотите вводить каждый раз)
-        // if (sessionStorage.getItem('auth_granted') === 'true') {
-        //     document.getElementById('lockScreen').style.display = 'none';
-        //     document.getElementById('appContent').style.display = 'block';
-        //     initApp();
-        // }
 
         const programData = [
             { id: "day1", name: "День 1 (Квадры)", exercises: [
