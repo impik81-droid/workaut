@@ -30,6 +30,59 @@
             margin-bottom: 12px;
             text-align: center;
         }
+        /* Стили экрана блокировки */
+        #lockScreen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 80vh;
+            text-align: center;
+            gap: 12px;
+        }
+        .lock-card {
+            background-color: var(--card-bg);
+            padding: 24px;
+            border-radius: 16px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            width: 100%;
+            max-width: 320px;
+            box-sizing: border-box;
+        }
+        .lock-input {
+            width: 100%;
+            padding: 10px;
+            font-size: 18px;
+            text-align: center;
+            border: 1px solid var(--hint-color);
+            border-radius: 8px;
+            background: transparent;
+            color: var(--text-color);
+            margin-bottom: 12px;
+            box-sizing: border-box;
+            letter-spacing: 4px;
+        }
+        .lock-btn {
+            width: 100%;
+            padding: 10px;
+            background-color: var(--button-color);
+            color: var(--button-text);
+            border: none;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .lock-error {
+            color: var(--danger-color);
+            font-size: 13px;
+            margin-top: 8px;
+            min-height: 16px;
+        }
+        /* Основной контент (скрыт по умолчанию) */
+        #appContent {
+            display: none;
+        }
         .calendar-section {
             background-color: var(--card-bg);
             border-radius: 12px;
@@ -250,24 +303,62 @@
 </head>
 <body>
 
-    <h1>Дневник тренировок</h1>
-
-    <div class="calendar-section">
-        <div class="date-picker-row">
-            <input type="date" id="workoutDate" onchange="changeDate(this.value)">
-        </div>
-        <div class="program-selector">
-            <span class="program-label">Выберите шаблон тренировки:</span>
-            <div class="tabs" id="tabsContainer"></div>
+    <!-- Экран ввода пароля -->
+    <div id="lockScreen">
+        <div class="lock-card">
+            <h1>🔒 Вход</h1>
+            <p style="font-size: 13px; color: var(--hint-color); margin-bottom: 16px;">Введите пароль для доступа к дневнику тренировок</p>
+            <input type="password" id="pinInput" class="lock-input" placeholder="••••" maxlength="10">
+            <button class="lock-btn" onclick="checkPassword()">Войти</button>
+            <div id="lockError" class="lock-error"></div>
         </div>
     </div>
 
-    <div id="workoutsContainer"></div>
+    <!-- Основное приложение -->
+    <div id="appContent">
+        <h1>Дневник тренировок</h1>
+
+        <div class="calendar-section">
+            <div class="date-picker-row">
+                <input type="date" id="workoutDate" onchange="changeDate(this.value)">
+            </div>
+            <div class="program-selector">
+                <span class="program-label">Выберите шаблон тренировки:</span>
+                <div class="tabs" id="tabsContainer"></div>
+            </div>
+        </div>
+
+        <div id="workoutsContainer"></div>
+    </div>
 
     <script>
         const tg = window.Telegram.WebApp;
         tg.ready();
         tg.expand();
+
+        // 🔑 УСТАНОВИТЕ СВОЙ ПАРОЛЬ ЗДЕСЬ
+        const APP_PASSWORD = "1234";
+
+        function checkPassword() {
+            const inputVal = document.getElementById('pinInput').value;
+            const errorDiv = document.getElementById('lockError');
+
+            if (inputVal === APP_PASSWORD) {
+                document.getElementById('lockScreen').style.display = 'none';
+                document.getElementById('appContent').style.display = 'block';
+                initApp();
+            } else {
+                errorDiv.innerText = "Неверный пароль!";
+                document.getElementById('pinInput').value = '';
+            }
+        }
+
+        // Автоматический вход, если уже вводили (опционально, раскомментируйте, если не хотите вводить каждый раз)
+        // if (sessionStorage.getItem('auth_granted') === 'true') {
+        //     document.getElementById('lockScreen').style.display = 'none';
+        //     document.getElementById('appContent').style.display = 'block';
+        //     initApp();
+        // }
 
         const programData = [
             { id: "day1", name: "День 1 (Квадры)", exercises: [
@@ -319,8 +410,6 @@
         function saveStorage(data) {
             localStorage.setItem('workout_app_v5', JSON.stringify(data));
         }
-
-        document.getElementById('workoutDate').value = selectedDate;
 
         window.changeDate = function(newDate) {
             if (!newDate) return;
@@ -547,8 +636,11 @@
             renderWorkouts();
         }
 
-        renderTabs();
-        renderWorkouts();
+        function initApp() {
+            document.getElementById('workoutDate').value = selectedDate;
+            renderTabs();
+            renderWorkouts();
+        }
     </script>
 </body>
 </html>
