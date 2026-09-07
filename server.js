@@ -1,31 +1,33 @@
 const express = require('express');
 const cors = require('cors');
+const multer = require('multer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Увеличиваем лимиты для JSON и URL-encoded данных до 100MB (чтобы телефон мог отправлять видео)
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
-
-// Разрешаем кросс-доменные запросы (чтобы Mini App мог свободно стучаться на сервер)
 app.use(cors());
 
-// Временное хранилище в памяти (или подключите вашу базу данных/файлы)
-let workoutData = {};
-
-// Простой тестовый маршрут
-app.get('/', (req, res) => {
-    works = "WorkAut Server is running!";
-    res.send(works);
+// Настройка multer для приема видео/файлов до 100 МБ
+const upload = multer({ 
+  limits: { fileSize: 100 * 1024 * 1024 } // 100 МБ
 });
 
-// Эндпоинт для сохранения данных тренировок и медиа
-app.post('/api/workout', (req, res) => {
+let workoutData = {};
+
+app.get('/', (req, res) => {
+    res.send("WorkAut Server is running!");
+});
+
+// Эндпоинт с поддержкой загрузки файла в поле 'video' или 'file'
+app.post('/api/workout', upload.single('video'), (req, res) => {
     try {
         const data = req.body;
+        if (req.file) {
+            console.log("Видео получено:", req.file.originalname, "Размер:", req.file.size);
+        }
         workoutData = { ...workoutData, ...data };
-        console.log("Данные тренировки успешно получены!");
         res.status(200).json({ success: true, message: "Saved successfully" });
     } catch (error) {
         console.error("Ошибка при сохранении:", error);
@@ -33,7 +35,6 @@ app.post('/api/workout', (req, res) => {
     }
 });
 
-// Эндпоинт для получения данных тренировок
 app.get('/api/workout', (req, res) => {
     res.status(200).json(workoutData);
 });
