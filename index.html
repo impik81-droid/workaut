@@ -908,13 +908,10 @@
 
             try {
 
-                const response = await fetch(`${SERVER_URL}/api/https://workaut.onrender.com/api/workout`, {
-
-                    method: 'POST',
-
-                    body: formData
-
-                });
+                const response = await fetch(`${SERVER_URL}/api/workout`, {
+    method: 'POST',
+    body: formData
+});
 
                 const result = await response.json();
 
