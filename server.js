@@ -21,7 +21,7 @@ app.get('/', (req, res) => {
 });
 
 // Эндпоинт с поддержкой загрузки файла в поле 'video' или 'file'
-app.post('/api/workout', upload.single('video'), (req, res) => {
+app.post('/api/workout', upload.any(), (req, res) => {
     try {
         const data = req.body;
         if (req.file) {
