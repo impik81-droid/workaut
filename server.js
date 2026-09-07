@@ -1,35 +1,18 @@
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
+const axios = require('axios');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Увеличиваем лимиты
+// Увеличиваем лимиты для загрузки видео
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 app.use(cors());
 
-// Делаем папку uploads доступной для просмотра снаружи (чтобы видео открывались)
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
-// Создаем папку для файлов
-const uploadDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadDir)){
-    fs.mkdirSync(uploadDir);
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, 'uploads/');
-  },
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + '-' + file.originalname);
-  }
-});
-
+// Храним файлы временно в оперативной памяти (не нагружая локальный диск Render)
+const storage = multer.memoryStorage();
 const upload = multer({ 
   storage: storage,
   limits: { fileSize: 100 * 1024 * 1024 }
@@ -37,44 +20,84 @@ const upload = multer({
 
 let workoutData = {};
 
+// Токен подтягивается из переменных окружения Render
+const YANDEX_OAUTH_TOKEN = process.env.YANDEX_TOKEN;
+
 app.get('/', (req, res) => {
-    res.send("WorkAut Server is running!");
+    res.send("WorkAut Server with Yandex Disk is running!");
 });
 
-app.post('/api/workout', upload.any(), (req, res) => {
+// Функция для загрузки файла на Яндекс Диск
+async function uploadToYandexDisk(buffer, filename) {
     try {
-        console.log("--- Получен запрос на /api/workout ---");
+        const pathOnDisk = `app_workouts/${Date.now()}-${filename}`;
+        
+        // 1. Получаем ссылку для загрузки от Яндекс.Диска
+        const uploadUrlRes = await axios.get(
+            `https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(pathOnDisk)}&overwrite=true`,
+            { headers: { 'Authorization': `OAuth ${YANDEX_OAUTH_TOKEN}` } }
+        );
+
+        const downloadUploadUrl = uploadUrlRes.data.href;
+
+        // 2. Загружаем сам файл по полученной ссылке
+        await axios.put(downloadUploadUrl, buffer, {
+            headers: { 'Content-Type': 'application/octet-stream' },
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity
+        });
+
+        // 3. Публикуем файл, чтобы получить публичную ссылку
+        await axios.put(
+            `https://cloud-api.yandex.net/v1/disk/resources/publish?path=${encodeURIComponent(pathOnDisk)}`,
+            {},
+            { headers: { 'Authorization': `OAuth ${YANDEX_OAUTH_TOKEN}` } }
+        );
+
+        // 4. Запрашиваем информацию о файле для получения публичной ссылки
+        const resourceRes = await axios.get(
+            `https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(pathOnDisk)}`,
+            { headers: { 'Authorization': `OAuth ${YANDEX_OAUTH_TOKEN}` } }
+        );
+
+        return resourceRes.data.public_url;
+    } catch (error) {
+        console.error("Ошибка при загрузке на Яндекс Диск:", error.response?.data || error.message);
+        throw error;
+    }
+}
+
+app.post('/api/workout', upload.any(), async (req, res) => {
+    try {
+        console.log("--- Получен запрос на /api/workout с файлами ---");
         const data = req.body;
         
-        let videoFile = null;
-        let thumbFile = null;
+        let videoUrl = null;
+        let thumbUrl = null;
 
         if (req.files && req.files.length > 0) {
-            console.log(`Получено файлов: ${req.files.length}`);
-            req.files.forEach(file => {
-                console.log(`- Поле: ${file.fieldname}, Файл: ${file.originalname}, Размер: ${file.size} байт`);
+            for (const file of req.files) {
+                console.log(`Загрузка ${file.fieldname} на Яндекс Диск...`);
+                const filePublicUrl = await uploadToYandexDisk(file.buffer, file.originalname);
+                
                 if (file.fieldname === 'video') {
-                    videoFile = file;
+                    videoUrl = filePublicUrl;
                 } else if (file.fieldname === 'thumbnail') {
-                    thumbFile = file;
+                    thumbUrl = filePublicUrl;
                 }
-            });
+            }
         }
 
         workoutData = { ...workoutData, ...data };
 
-        // Формируем ссылки для фронтенда, если файлы были переданы
         let urls = null;
-        if (videoFile || thumbFile) {
-            urls = {
-                videoUrl: videoFile ? `/uploads/${videoFile.filename}` : null,
-                thumbUrl: thumbFile ? `/uploads/${thumbFile.filename}` : null
-            };
+        if (videoUrl || thumbUrl) {
+            urls = { videoUrl, thumbUrl };
         }
 
         res.status(200).json({ 
             success: true, 
-            message: "Saved successfully",
+            message: "Saved successfully to Yandex Disk",
             urls: urls 
         });
     } catch (error) {
@@ -91,6 +114,5 @@ const server = app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
 });
 
-// Увеличиваем тайм-аут сервера до 5 минут (300 секунд) для тяжелых видео
 server.timeout = 300000;
 server.keepAliveTimeout = 300000;
