@@ -12,6 +12,9 @@ app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 app.use(cors());
 
+// Делаем папку uploads доступной для просмотра снаружи (чтобы видео открывались)
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
 // Создаем папку для файлов
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)){
@@ -42,14 +45,38 @@ app.post('/api/workout', upload.any(), (req, res) => {
     try {
         console.log("--- Получен запрос на /api/workout ---");
         const data = req.body;
+        
+        let videoFile = null;
+        let thumbFile = null;
+
         if (req.files && req.files.length > 0) {
             console.log(`Получено файлов: ${req.files.length}`);
             req.files.forEach(file => {
-                console.log(`- Файл: ${file.originalname}, Размер: ${file.size} байт`);
+                console.log(`- Поле: ${file.fieldname}, Файл: ${file.originalname}, Размер: ${file.size} байт`);
+                if (file.fieldname === 'video') {
+                    videoFile = file;
+                } else if (file.fieldname === 'thumbnail') {
+                    thumbFile = file;
+                }
             });
         }
+
         workoutData = { ...workoutData, ...data };
-        res.status(200).json({ success: true, message: "Saved successfully" });
+
+        // Формируем ссылки для фронтенда, если файлы были переданы
+        let urls = null;
+        if (videoFile || thumbFile) {
+            urls = {
+                videoUrl: videoFile ? `/uploads/${videoFile.filename}` : null,
+                thumbUrl: thumbFile ? `/uploads/${thumbFile.filename}` : null
+            };
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            message: "Saved successfully",
+            urls: urls 
+        });
     } catch (error) {
         console.error("Ошибка при сохранении:", error);
         res.status(500).json({ success: false, error: error.message });
