@@ -1,7 +1,7 @@
 {
-  "name": "workout-server",
+  "name": "workaut",
   "version": "1.0.0",
-  "description": "Server for workout diary",
+  "description": "Workout backend",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
