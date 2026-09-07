@@ -7,17 +7,17 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Увеличиваем лимиты
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 app.use(cors());
 
-// Создаем папку для временного хранения файлов, если её нет
+// Создаем папку для файлов
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)){
     fs.mkdirSync(uploadDir);
 }
 
-// Настраиваем сохранение на диск, а не в оперативную память
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, 'uploads/');
@@ -29,7 +29,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({ 
   storage: storage,
-  limits: { fileSize: 100 * 1024 * 1024 } // 100 МБ
+  limits: { fileSize: 100 * 1024 * 1024 }
 });
 
 let workoutData = {};
@@ -38,14 +38,14 @@ app.get('/', (req, res) => {
     res.send("WorkAut Server is running!");
 });
 
-// Эндпоинт принимает любые файлы и сохраняет их на диск
 app.post('/api/workout', upload.any(), (req, res) => {
     try {
+        console.log("--- Получен запрос на /api/workout ---");
         const data = req.body;
         if (req.files && req.files.length > 0) {
-            console.log("Файлов получено:", req.files.length);
+            console.log(`Получено файлов: ${req.files.length}`);
             req.files.forEach(file => {
-                console.log("- Файл:", file.originalname, "Размер:", file.size, "Путь:", file.path);
+                console.log(`- Файл: ${file.originalname}, Размер: ${file.size} байт`);
             });
         }
         workoutData = { ...workoutData, ...data };
@@ -60,6 +60,10 @@ app.get('/api/workout', (req, res) => {
     res.status(200).json(workoutData);
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
 });
+
+// Увеличиваем тайм-аут сервера до 5 минут (300 секунд) для тяжелых видео
+server.timeout = 300000;
+server.keepAliveTimeout = 300000;
