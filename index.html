@@ -160,7 +160,6 @@
         tg.expand();
 
         const APP_PASSWORD = "1234";
-        // ЗАМЕНИТЕ ЭТУ ССЫЛКУ НА URL ВАШЕГО ЗАПУЩЕННОГО СЕРВЕРА
         const SERVER_URL = "https://workaut.onrender.com";
 
         let cloudData = { dates: {}, templates: {}, comments: {}, videos: {} };
@@ -179,7 +178,7 @@
 
         async function loadCloudData() {
             try {
-                const response = await fetch(`${SERVER_URL}/api/data`);
+                const response = await fetch(`${SERVER_URL}/api/workout`);
                 cloudData = await response.json();
                 if (!cloudData.videos) cloudData.videos = {};
             } catch (e) {
@@ -190,7 +189,7 @@
 
         async function syncWithServer() {
             try {
-                await fetch(`${SERVER_URL}/api/data`, {
+                await fetch(`${SERVER_URL}/api/workout`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(cloudData)
@@ -453,7 +452,7 @@
             if (thumbBlob) formData.append('thumbnail', thumbBlob, 'thumb.jpg');
 
             try {
-                const response = await fetch(`${SERVER_URL}/api/https://workaut.onrender.com/api/workout`, {
+                const response = await fetch(`${SERVER_URL}/api/workout`, {
                     method: 'POST',
                     body: formData
                 });
