@@ -160,6 +160,9 @@
         tg.expand();
 
         const APP_PASSWORD = "1234";
+        // Тот же токен используется для защиты запросов к бэкенду (заголовок x-app-token).
+        // Совпадает с APP_TOKEN на сервере (по умолчанию "1234"). При желании поменяйте оба значения.
+        const APP_TOKEN = APP_PASSWORD;
         // Ссылка на ваш сервер на Render
         const SERVER_URL = "https://workaut.onrender.com";
 
@@ -179,9 +182,15 @@
 
         async function loadCloudData() {
             try {
-                const response = await fetch(`${SERVER_URL}/api/data`);
+                const response = await fetch(`${SERVER_URL}/api/data`, {
+                    headers: { 'x-app-token': APP_TOKEN }
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 cloudData = await response.json();
                 if (!cloudData.videos) cloudData.videos = {};
+                if (!cloudData.dates) cloudData.dates = {};
+                if (!cloudData.templates) cloudData.templates = {};
+                if (!cloudData.comments) cloudData.comments = {};
             } catch (e) {
                 console.log("Ошибка загрузки с сервера", e);
             }
@@ -190,11 +199,15 @@
 
         async function syncWithServer() {
             try {
-                await fetch(`${SERVER_URL}/api/data`, {
+                const response = await fetch(`${SERVER_URL}/api/data`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-app-token': APP_TOKEN
+                    },
                     body: JSON.stringify(cloudData)
                 });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
             } catch (e) {
                 console.log("Ошибка синхронизации", e);
             }
@@ -280,7 +293,7 @@
         function renderWorkouts() {
             const container = document.getElementById('workoutsContainer');
             container.innerHTML = '';
-            
+
             if (!cloudData.dates[selectedDate]) cloudData.dates[selectedDate] = { programId: activeProgramId };
             const dayData = cloudData.dates[selectedDate][activeProgramId] || {};
             const currentProgram = programData.find(p => p.id === activeProgramId) || programData[0];
@@ -292,8 +305,8 @@
                 let setsHtml = '';
                 for (let s = 0; s < ex.sets; s++) {
                     const setKey = `set_${s}`;
-                    let setData = dayData[exIndex] && dayData[exIndex][setKey] 
-                        ? dayData[exIndex][setKey] 
+                    let setData = dayData[exIndex] && dayData[exIndex][setKey]
+                        ? dayData[exIndex][setKey]
                         : getLastData(activeProgramId, exIndex, s);
 
                     setsHtml += `
@@ -308,13 +321,13 @@
 
                 const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
                 const videoData = cloudData.videos[itemKey];
-                
+
                 let videoBlock = '';
                 if (videoData && videoData.videoUrl) {
                     // Яндекс Диск отдает прямую публичную ссылку, поэтому используем её напрямую
                     const fullVideoUrl = videoData.videoUrl;
                     const fullThumbUrl = videoData.thumbUrl ? videoData.thumbUrl : '';
-                    
+
                     const commentsList = cloudData.comments[itemKey] || [];
                     let commentsHtml = '';
                     commentsList.forEach((c) => {
@@ -456,6 +469,7 @@
             try {
                 const response = await fetch(`${SERVER_URL}/api/workout`, {
                     method: 'POST',
+                    headers: { 'x-app-token': APP_TOKEN },
                     body: formData
                 });
 
@@ -464,9 +478,11 @@
                 if (result.success) {
                     if (!cloudData.videos) cloudData.videos = {};
                     cloudData.videos[itemKey] = result.urls;
-                    
+
                     // Синхронизируем общие данные с бэкендом, чтобы видео сохранялось
                     await syncWithServer();
+                } else {
+                    alert("Ошибка загрузки видео: " + (result.error || "неизвестная ошибка"));
                 }
             } catch (err) {
                 alert("Ошибка загрузки видео на сервер.");
@@ -481,7 +497,10 @@
             try {
                 await fetch(`${SERVER_URL}/api/delete-video`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-app-token': APP_TOKEN
+                    },
                     body: JSON.stringify({ key: itemKey })
                 });
                 delete cloudData.videos[itemKey];
