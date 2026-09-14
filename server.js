@@ -153,36 +153,56 @@ async function uploadToYandexDisk(buffer, filename) {
 
   const pathOnDisk = `/workaut/${Date.now()}-${filename}`;
 
-  const uploadUrlRes = await axiosWithRetry({
-    method: 'get',
-    url: `https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(pathOnDisk)}&overwrite=true`,
-    headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
-  });
+  let uploadUrl;
+  try {
+    const uploadUrlRes = await axiosWithRetry({
+      method: 'get',
+      url: `https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(pathOnDisk)}&overwrite=true`,
+      headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
+    });
+    uploadUrl = uploadUrlRes.data.href;
+  } catch (error) {
+    console.error(`[uploadToYandexDisk] Ошибка получения upload-url (${error.response?.status}):`, error.response?.data || error.message);
+    throw error;
+  }
 
-  const uploadUrl = uploadUrlRes.data.href;
+  try {
+    await axiosWithRetry({
+      method: 'put',
+      url: uploadUrl,
+      data: buffer,
+      headers: { 'Content-Type': 'application/octet-stream' },
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+      timeout: 120000
+    });
+  } catch (error) {
+    console.error(`[uploadToYandexDisk] Ошибка загрузки файла (${error.response?.status}):`, error.response?.data || error.message);
+    throw error;
+  }
 
-  await axiosWithRetry({
-    method: 'put',
-    url: uploadUrl,
-    data: buffer,
-    headers: { 'Content-Type': 'application/octet-stream' },
-    maxContentLength: Infinity,
-    maxBodyLength: Infinity,
-    timeout: 120000
-  });
+  try {
+    await axiosWithRetry({
+      method: 'put',
+      url: `https://cloud-api.yandex.net/v1/disk/resources/publish?path=${encodeURIComponent(pathOnDisk)}`,
+      headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
+    });
+  } catch (error) {
+    console.error(`[uploadToYandexDisk] Ошибка публикации файла (${error.response?.status}):`, error.response?.data || error.message);
+    throw error;
+  }
 
-  await axiosWithRetry({
-    method: 'put',
-    url: `https://cloud-api.yandex.net/v1/disk/resources/publish?path=${encodeURIComponent(pathOnDisk)}`,
-    data: {},
-    headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
-  });
-
-  const resourceRes = await axiosWithRetry({
-    method: 'get',
-    url: `https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(pathOnDisk)}`,
-    headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
-  });
+  let resourceRes;
+  try {
+    resourceRes = await axiosWithRetry({
+      method: 'get',
+      url: `https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(pathOnDisk)}`,
+      headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
+    });
+  } catch (error) {
+    console.error(`[uploadToYandexDisk] Ошибка получения инфо о файле (${error.response?.status}):`, error.response?.data || error.message);
+    throw error;
+  }
 
   return { publicUrl: resourceRes.data.public_url, diskPath: pathOnDisk };
 }
@@ -250,7 +270,7 @@ app.post('/api/workout', checkAuth, upload.any(), async (req, res) => {
       urls
     });
   } catch (error) {
-    console.error('Ошибка при сохранении:', error);
+    console.error('Ошибка при сохранении:', error.response?.data || error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -307,7 +327,7 @@ app.post('/api/delete-video', checkAuth, async (req, res) => {
 
     res.status(200).json({ success: true });
   } catch (error) {
-    console.error('Ошибка при удалении видео:', error);
+    console.error('Ошибка при удалении видео:', error.response?.data || error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
