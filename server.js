@@ -128,6 +128,21 @@ app.get('/', (req, res) => {
   res.send('WorkAut Server with Yandex Disk is running!');
 });
 
+// Хелпер: axios-запрос с таймаутом и повторными попытками при сетевых сбоях —
+// связность между Render и Яндекс.Диском иногда подводит (таймауты, недоступность IPv6 и т.п.).
+// family: 4 — не тратим время на заведомо недоступный на Render IPv6.
+async function axiosWithRetry(config, retries = 2) {
+  try {
+    return await axios({ timeout: 15000, family: 4, ...config });
+  } catch (err) {
+    const retryable = ['ETIMEDOUT', 'ECONNRESET', 'ECONNABORTED', 'ENETUNREACH', 'EAI_AGAIN'].includes(err.code);
+    if (retryable && retries > 0) {
+      await new Promise((r) => setTimeout(r, 1500));
+      return axiosWithRetry(config, retries - 1);
+    }
+    throw err;
+  }
+}
 // ---------------------------------------------------------------------------
 // Яндекс.Диск
 // ---------------------------------------------------------------------------
@@ -138,29 +153,36 @@ async function uploadToYandexDisk(buffer, filename) {
 
   const pathOnDisk = `/workaut/${Date.now()}-${filename}`;
 
-  const uploadUrlRes = await axios.get(
-    `https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(pathOnDisk)}&overwrite=true`,
-    { headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` } }
-  );
+  const uploadUrlRes = await axiosWithRetry({
+    method: 'get',
+    url: `https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(pathOnDisk)}&overwrite=true`,
+    headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
+  });
 
   const uploadUrl = uploadUrlRes.data.href;
 
-  await axios.put(uploadUrl, buffer, {
+  await axiosWithRetry({
+    method: 'put',
+    url: uploadUrl,
+    data: buffer,
     headers: { 'Content-Type': 'application/octet-stream' },
     maxContentLength: Infinity,
-    maxBodyLength: Infinity
+    maxBodyLength: Infinity,
+    timeout: 120000
   });
 
-  await axios.put(
-    `https://cloud-api.yandex.net/v1/disk/resources/publish?path=${encodeURIComponent(pathOnDisk)}`,
-    {},
-    { headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` } }
-  );
+  await axiosWithRetry({
+    method: 'put',
+    url: `https://cloud-api.yandex.net/v1/disk/resources/publish?path=${encodeURIComponent(pathOnDisk)}`,
+    data: {},
+    headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
+  });
 
-  const resourceRes = await axios.get(
-    `https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(pathOnDisk)}`,
-    { headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` } }
-  );
+  const resourceRes = await axiosWithRetry({
+    method: 'get',
+    url: `https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(pathOnDisk)}`,
+    headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
+  });
 
   return { publicUrl: resourceRes.data.public_url, diskPath: pathOnDisk };
 }
@@ -168,10 +190,11 @@ async function uploadToYandexDisk(buffer, filename) {
 async function deleteFromYandexDisk(pathOnDisk) {
   if (!pathOnDisk || !YANDEX_OAUTH_TOKEN) return;
   try {
-    await axios.delete(
-      `https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(pathOnDisk)}&permanently=true`,
-      { headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` } }
-    );
+    await axiosWithRetry({
+      method: 'delete',
+      url: `https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(pathOnDisk)}&permanently=true`,
+      headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
+    });
   } catch (error) {
     console.error('Ошибка при удалении с Яндекс Диска:', error.response?.data || error.message);
   }
@@ -252,14 +275,15 @@ app.get('/api/media/:type/:key', async (req, res) => {
   if (!diskPath || !YANDEX_OAUTH_TOKEN) return res.status(404).send('Not found');
 
   try {
-    const linkRes = await axios.get(
-      `https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(diskPath)}`,
-      { headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` } }
-    );
+    const linkRes = await axiosWithRetry({
+      method: 'get',
+      url: `https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(diskPath)}`,
+      headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
+    });
     res.redirect(linkRes.data.href);
   } catch (error) {
     console.error('Ошибка получения прямой ссылки на медиа:', error.response?.data || error.message);
-    res.status(500).send('Error fetching media link');
+    res.status(504).json({ success: false, error: 'Не удалось получить ссылку с Яндекс.Диска (таймаут или ошибка сети)' });
   }
 });
 
