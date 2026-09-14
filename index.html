@@ -323,10 +323,12 @@
                 const videoData = cloudData.videos[itemKey];
 
                 let videoBlock = '';
-                if (videoData && videoData.videoUrl) {
-                    // Яндекс Диск отдает прямую публичную ссылку, поэтому используем её напрямую
-                    const fullVideoUrl = videoData.videoUrl;
-                    const fullThumbUrl = videoData.thumbUrl ? videoData.thumbUrl : '';
+                if (videoData) {
+                    // Ссылки строятся динамически через сервер: он каждый раз запрашивает
+                    // у Яндекс.Диска свежую прямую ссылку на файл (public_url для этого не годится).
+                    const encodedKey = encodeURIComponent(itemKey);
+                    const fullVideoUrl = `${SERVER_URL}/api/media/video/${encodedKey}?token=${APP_TOKEN}`;
+                    const fullThumbUrl = `${SERVER_URL}/api/media/thumbnail/${encodedKey}?token=${APP_TOKEN}`;
 
                     const commentsList = cloudData.comments[itemKey] || [];
                     let commentsHtml = '';
@@ -477,7 +479,10 @@
 
                 if (result.success) {
                     if (!cloudData.videos) cloudData.videos = {};
-                    cloudData.videos[itemKey] = result.urls;
+                    // Сами ссылки на файл не сохраняем (public_url не годится для показа) —
+                    // просто отмечаем, что видео для этого упражнения есть.
+                    // Реальный путь к файлу на Диске сервер уже хранит у себя (store.videoPaths).
+                    cloudData.videos[itemKey] = { hasVideo: true };
 
                     // Синхронизируем общие данные с бэкендом, чтобы видео сохранялось
                     await syncWithServer();
