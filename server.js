@@ -233,6 +233,37 @@ app.post('/api/workout', checkAuth, upload.any(), async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Отдача видео/превью: public_url с Яндекс.Диска — это страница предпросмотра,
+// а не прямая ссылка на файл, поэтому <video>/<img> не могут её использовать напрямую.
+// Здесь мы каждый раз запрашиваем свежую временную прямую ссылку и редиректим на неё.
+// Токен передаётся через query-параметр, т.к. <video src> / <img src> не может слать заголовки.
+// ---------------------------------------------------------------------------
+app.get('/api/media/:type/:key', async (req, res) => {
+  if (req.query.token !== APP_TOKEN) {
+    return res.status(401).send('Unauthorized');
+  }
+
+  const { type, key } = req.params;
+  const decodedKey = decodeURIComponent(key);
+  const paths = store.videoPaths[decodedKey];
+  if (!paths) return res.status(404).send('Not found');
+
+  const diskPath = type === 'video' ? paths.videoPath : paths.thumbPath;
+  if (!diskPath || !YANDEX_OAUTH_TOKEN) return res.status(404).send('Not found');
+
+  try {
+    const linkRes = await axios.get(
+      `https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(diskPath)}`,
+      { headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` } }
+    );
+    res.redirect(linkRes.data.href);
+  } catch (error) {
+    console.error('Ошибка получения прямой ссылки на медиа:', error.response?.data || error.message);
+    res.status(500).send('Error fetching media link');
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Удаление видео (реально удаляет файлы с Яндекс.Диска)
 // ---------------------------------------------------------------------------
 app.post('/api/delete-video', checkAuth, async (req, res) => {
