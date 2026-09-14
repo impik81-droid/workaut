@@ -344,7 +344,7 @@
                     videoBlock = `
                         <div class="video-preview-container">
                             <div class="thumbnail-wrapper" onclick="openVideoModal('${fullVideoUrl}')">
-                                <img src="${fullThumbUrl}" class="thumbnail-img" alt="Видео">
+                                <img src="${fullThumbUrl}" class="thumbnail-img" alt="Видео" onerror="this.style.display='none'; this.nextElementSibling.style.background='#333';">
                                 <div class="play-overlay">▶</div>
                             </div>
                             <div class="video-info-block">
@@ -385,11 +385,30 @@
             });
         }
 
-        window.openVideoModal = function(url) {
+        window.openVideoModal = async function(url) {
             const modal = document.getElementById('videoModal');
             const videoElem = document.getElementById('modalVideo');
-            videoElem.src = url;
+
             modal.style.display = 'flex';
+            videoElem.poster = '';
+            videoElem.src = '';
+
+            // Сервер на каждый запрос заново получает временную ссылку у Яндекс.Диска.
+            // Если сеть подвисла — проверим это заранее, а не будем молча зависать с пустым плеером.
+            try {
+                const checkResp = await fetch(url, { method: 'HEAD' });
+                if (!checkResp.ok) {
+                    alert('Не удалось загрузить видео (сервер ответил ошибкой). Попробуйте ещё раз через минуту.');
+                    modal.style.display = 'none';
+                    return;
+                }
+            } catch (e) {
+                alert('Не удалось загрузить видео. Проверьте соединение и попробуйте ещё раз.');
+                modal.style.display = 'none';
+                return;
+            }
+
+            videoElem.src = url;
             videoElem.play();
         }
 
