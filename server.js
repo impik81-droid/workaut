@@ -8,9 +8,11 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Файл, в котором храним все данные приложения (переживает обычные рестарты процесса,
-// но НЕ переживает передеплой на бесплатном плане Render — там диск эфемерный).
+// Локальный файл — используется как быстрый кэш и запасной вариант.
+// Но основное хранилище — Яндекс.Диск, т.к. локальный диск на Render эфемерный
+// и стирается при рестарте/редеплое/пробуждении после сна.
 const DATA_FILE = path.join(__dirname, 'data.json');
+const DATA_PATH_ON_DISK = '/workaut/app-data.json';
 
 // Простой общий секрет для защиты API. По умолчанию совпадает с паролем на фронте (1234),
 // чтобы всё сразу работало. Рекомендуется задать свой APP_TOKEN в переменных окружения Render.
@@ -30,30 +32,85 @@ const upload = multer({
 // ---------------------------------------------------------------------------
 // Персистентное хранилище
 // ---------------------------------------------------------------------------
-function loadStore() {
+function emptyStore() {
+  return { cloudData: { dates: {}, templates: {}, comments: {}, videos: {} }, videoPaths: {} };
+}
+
+function loadLocalStore() {
   try {
     const raw = fs.readFileSync(DATA_FILE, 'utf-8');
     const parsed = JSON.parse(raw);
     return {
-      cloudData: parsed.cloudData || { dates: {}, templates: {}, comments: {}, videos: {} },
+      cloudData: parsed.cloudData || emptyStore().cloudData,
       videoPaths: parsed.videoPaths || {}
     };
   } catch (e) {
-    return { cloudData: { dates: {}, templates: {}, comments: {}, videos: {} }, videoPaths: {} };
+    return emptyStore();
   }
 }
 
-let store = loadStore();
+function saveLocalStore() {
+  fs.writeFile(DATA_FILE, JSON.stringify(store, null, 2), (err) => {
+    if (err) console.error('Ошибка сохранения локального кэша data.json:', err);
+  });
+}
+
+async function downloadStoreFromYandex() {
+  if (!YANDEX_OAUTH_TOKEN) return null;
+  try {
+    const linkRes = await axios.get(
+      `https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(DATA_PATH_ON_DISK)}`,
+      { headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` } }
+    );
+    const fileRes = await axios.get(linkRes.data.href);
+    const data = fileRes.data;
+    return {
+      cloudData: data.cloudData || emptyStore().cloudData,
+      videoPaths: data.videoPaths || {}
+    };
+  } catch (e) {
+    // Файла ещё нет на Диске (первый запуск) или другая ошибка — не критично
+    console.log('Не удалось загрузить data.json с Яндекс.Диска (возможно, его ещё нет):', e.response?.status || e.message);
+    return null;
+  }
+}
+
+async function uploadStoreToYandex() {
+  if (!YANDEX_OAUTH_TOKEN) return;
+  try {
+    const uploadUrlRes = await axios.get(
+      `https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(DATA_PATH_ON_DISK)}&overwrite=true`,
+      { headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` } }
+    );
+    await axios.put(uploadUrlRes.data.href, JSON.stringify(store), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (e) {
+    console.error('Ошибка сохранения data.json на Яндекс.Диск:', e.response?.data || e.message);
+  }
+}
+
+let store = emptyStore();
 let saveTimeout = null;
 
+async function initStore() {
+  const remote = await downloadStoreFromYandex();
+  if (remote) {
+    store = remote;
+    console.log('Данные загружены с Яндекс.Диска.');
+  } else {
+    store = loadLocalStore();
+    console.log('Данные загружены из локального кэша (или созданы пустыми).');
+  }
+}
+
 function saveStore() {
-  // небольшой дебаунс, чтобы не писать на диск при каждом нажатии клавиши
+  // небольшой дебаунс, чтобы не писать при каждом нажатии клавиши
   clearTimeout(saveTimeout);
   saveTimeout = setTimeout(() => {
-    fs.writeFile(DATA_FILE, JSON.stringify(store, null, 2), (err) => {
-      if (err) console.error('Ошибка сохранения data.json:', err);
-    });
-  }, 200);
+    saveLocalStore();
+    uploadStoreToYandex();
+  }, 500);
 }
 
 // ---------------------------------------------------------------------------
@@ -200,12 +257,14 @@ app.post('/api/delete-video', checkAuth, async (req, res) => {
   }
 });
 
-const server = app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-  if (!YANDEX_OAUTH_TOKEN) {
-    console.warn('ВНИМАНИЕ: переменная окружения YANDEX_TOKEN не задана — загрузка видео работать не будет.');
-  }
-});
+initStore().then(() => {
+  const server = app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+    if (!YANDEX_OAUTH_TOKEN) {
+      console.warn('ВНИМАНИЕ: переменная окружения YANDEX_TOKEN не задана — загрузка видео и сохранение данных на Диск работать не будут.');
+    }
+  });
 
-server.timeout = 300000;
-server.keepAliveTimeout = 300000;
+  server.timeout = 300000;
+  server.keepAliveTimeout = 300000;
+});
