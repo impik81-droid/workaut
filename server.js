@@ -324,7 +324,7 @@ app.get('/api/media/:type/:key', async (req, res) => {
   }
 });
 
-// Новый проксирующий эндпоинт для обхода 403 ошибки Яндекс.Диска
+// Новый оптимизированный проксирующий эндпоинт для видео
 app.get('/api/stream/:type/:key', async (req, res) => {
   if (req.query.token !== APP_TOKEN) {
     return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -348,18 +348,25 @@ app.get('/api/stream/:type/:key', async (req, res) => {
 
     const fileUrl = linkRes.data.href;
 
+    // Запрос к файлу на Яндекс Диске с поддержкой Range (для перемотки и стабильного потока)
+    const headers = {};
+    if (req.headers['range']) {
+      headers['range'] = req.headers['range'];
+    }
+
     const response = await axios({
       method: 'get',
       url: fileUrl,
-      responseType: 'stream'
+      responseType: 'stream',
+      headers: headers,
+      timeout: 60000
     });
 
-    if (response.headers['content-type']) {
-      res.setHeader('Content-Type', response.headers['content-type']);
-    }
-    if (response.headers['content-length']) {
-      res.setHeader('Content-Length', response.headers['content-length']);
-    }
+    // Прокидываем заголовки ответа (включая Content-Range, Content-Length, Content-Type)
+    Object.keys(response.headers).forEach(header => {
+      res.setHeader(header, response.headers[header]);
+    });
+    res.status(response.status);
 
     response.data.pipe(res);
   } catch (error) {
