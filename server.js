@@ -296,7 +296,7 @@ app.post('/api/workout', checkAuth, upload.any(), async (req, res) => {
   }
 });
 
-// Старый эндпоинт (оставляем для совместимости)
+// Исправленный эндпоинт с прямым редиректом на Яндекс.Диск
 app.get('/api/media/:type/:key', async (req, res) => {
   if (req.query.token !== APP_TOKEN) {
     return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -317,26 +317,26 @@ app.get('/api/media/:type/:key', async (req, res) => {
       params: { path: diskPath },
       headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
     });
-    res.status(200).json({ success: true, url: linkRes.data.href });
+    
+    // Перенаправляем браузер сразу на реальный медиафайл в облаке
+    return res.redirect(302, linkRes.data.href);
   } catch (error) {
     console.error('Ошибка получения прямой ссылки на медиа:', error.response?.data || error.message);
-    res.status(504).json({ success: false, error: 'Не удалось получить ссылку с Яндекс.Диска (таймаут или ошибка сети)' });
+    res.status(504).json({ success: false, error: 'Не удалось получить ссылку с Яндекс.Диска' });
   }
 });
 
-// Исправленный эндпоинт для безопасной потоковой передачи (стриминга) видео через прокси
+// Эндпоинт для безопасной потоковой передачи (стриминга) видео через прокси
 app.get('/api/stream/:type/:key', async (req, res) => {
   try {
     const { type } = req.params;
     const decodedKey = decodeURIComponent(req.params.key);
     const token = req.query.token;
 
-    // 1. Проверка токена
     if (token !== APP_TOKEN) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // 2. Ищем пути к файлам в store.videoPaths по раскодированному ключу
     const paths = store.videoPaths && store.videoPaths[decodedKey];
     if (!paths) {
       console.warn(`[Stream 404] Ключ не найден в videoPaths: "${decodedKey}"`);
@@ -348,7 +348,6 @@ app.get('/api/stream/:type/:key', async (req, res) => {
       return res.status(404).json({ error: 'Disk path or token missing' });
     }
 
-    // 3. Запрашиваем прямую ссылку на скачивание у Яндекс Диска
     const yaRes = await axios.get(
       `https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(diskPath)}`,
       {
@@ -360,14 +359,12 @@ app.get('/api/stream/:type/:key', async (req, res) => {
 
     const downloadUrl = yaRes.data.href;
 
-    // 4. Запрашиваем сам файл с Яндекс Диска в режиме потока (stream)
     const response = await axios({
       method: 'get',
       url: downloadUrl,
       responseType: 'stream'
     });
 
-    // 5. Передаем заголовки типа и размера контента, если они есть
     if (response.headers['content-type']) {
       res.setHeader('Content-Type', response.headers['content-type']);
     }
@@ -375,7 +372,6 @@ app.get('/api/stream/:type/:key', async (req, res) => {
       res.setHeader('Content-Length', response.headers['content-length']);
     }
 
-    // 6. ОБРАБОТЧИК ОШИБОК ПОТОКА (предотвращает падение процесса Node.js при обрыве связи)
     response.data.on('error', (err) => {
       console.error('Ошибка передачи потока (stream error):', err.message);
       if (!res.headersSent) {
@@ -385,7 +381,6 @@ app.get('/api/stream/:type/:key', async (req, res) => {
       }
     });
 
-    // 7. Безопасно транслируем поток клиенту
     response.data.pipe(res);
 
   } catch (error) {
