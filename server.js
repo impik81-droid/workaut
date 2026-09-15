@@ -8,14 +8,9 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Локальный файл — используется как быстрый кэш и запасной вариант.
-// Но основное хранилище — Яндекс.Диск, т.к. локальный диск на Render эфемерный
-// и стирается при рестарте/редеплое/пробуждении после сна.
 const DATA_FILE = path.join(__dirname, 'data.json');
 const DATA_PATH_ON_DISK = '/workaut/app-data.json';
 
-// Простой общий секрет для защиты API. По умолчанию совпадает с паролем на фронте (1234),
-// чтобы всё сразу работало. Рекомендуется задать свой APP_TOKEN в переменных окружения Render.
 const APP_TOKEN = process.env.APP_TOKEN || '1234';
 const YANDEX_OAUTH_TOKEN = process.env.YANDEX_TOKEN;
 
@@ -29,9 +24,6 @@ const upload = multer({
   limits: { fileSize: 100 * 1024 * 1024 }
 });
 
-// ---------------------------------------------------------------------------
-// Персистентное хранилище
-// ---------------------------------------------------------------------------
 function emptyStore() {
   return { cloudData: { dates: {}, templates: {}, comments: {}, videos: {} }, videoPaths: {} };
 }
@@ -69,7 +61,6 @@ async function downloadStoreFromYandex() {
       videoPaths: data.videoPaths || {}
     };
   } catch (e) {
-    console.log('Не удалось загрузить data.json с Яндекс.Диска (возможно, его ещё нет):', e.response?.status || e.message);
     return null;
   }
 }
@@ -99,7 +90,7 @@ async function initStore() {
     console.log('Данные загружены с Яндекс.Диска.');
   } else {
     store = loadLocalStore();
-    console.log('Данные загружены из локального кэша (или созданы пустыми).');
+    console.log('Данные загружены из локального кэша.');
   }
 }
 
@@ -111,9 +102,6 @@ function saveStore() {
   }, 500);
 }
 
-// ---------------------------------------------------------------------------
-// Авторизация
-// ---------------------------------------------------------------------------
 function checkAuth(req, res, next) {
   const token = req.headers['x-app-token'];
   if (token !== APP_TOKEN) {
@@ -126,81 +114,72 @@ app.get('/', (req, res) => {
   res.send('WorkAut Server with Yandex Disk is running!');
 });
 
-async function axiosWithRetry(config, retries = 2) {
+async function axiosWithRetry(config, retries = 3) {
   try {
-    return await axios({ timeout: 15000, family: 4, ...config });
+    return await axios({ timeout: 20000, family: 4, ...config });
   } catch (err) {
     const retryable = ['ETIMEDOUT', 'ECONNRESET', 'ECONNABORTED', 'ENETUNREACH', 'EAI_AGAIN'].includes(err.code);
     if (retryable && retries > 0) {
-      await new Promise((r) => setTimeout(r, 1500));
+      await new Promise((r) => setTimeout(r, 2000));
       return axiosWithRetry(config, retries - 1);
     }
     throw err;
   }
 }
 
-// ---------------------------------------------------------------------------
-// Яндекс.Диск
-// ---------------------------------------------------------------------------
-async function uploadToYandexDisk(buffer, filename) {
+// Загрузка файла и сразу получение прямой скачиваемой ссылки
+async function uploadAndGetDirectLink(buffer, filename) {
   if (!YANDEX_OAUTH_TOKEN) {
-    throw new Error('YANDEX_TOKEN не задан на сервере (переменные окружения)');
+    throw new Error('YANDEX_TOKEN не задан на сервере');
   }
 
   const pathOnDisk = `/workaut/${Date.now()}-${filename}`;
 
-  let uploadUrl;
-  try {
-    const uploadUrlRes = await axiosWithRetry({
-      method: 'get',
-      url: `https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(pathOnDisk)}&overwrite=true`,
-      headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
-    });
-    uploadUrl = uploadUrlRes.data.href;
-  } catch (error) {
-    console.error(`[uploadToYandexDisk] Ошибка получения upload-url (${error.response?.status}):`, error.response?.data || error.message);
-    throw error;
-  }
+  // 1. Получаем урл для загрузки
+  const uploadUrlRes = await axiosWithRetry({
+    method: 'get',
+    url: `https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(pathOnDisk)}&overwrite=true`,
+    headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
+  });
 
-  try {
-    await axiosWithRetry({
-      method: 'put',
-      url: uploadUrl,
-      data: buffer,
-      headers: { 'Content-Type': 'application/octet-stream' },
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity,
-      timeout: 120000
-    });
-  } catch (error) {
-    console.error(`[uploadToYandexDisk] Ошибка загрузки файла (${error.response?.status}):`, error.response?.data || error.message);
-    throw error;
-  }
+  // 2. Загружаем файл
+  await axiosWithRetry({
+    method: 'put',
+    url: uploadUrlRes.data.href,
+    data: buffer,
+    headers: { 'Content-Type': 'application/octet-stream' },
+    maxContentLength: Infinity,
+    maxBodyLength: Infinity,
+    timeout: 120000
+  });
 
-  try {
-    await axiosWithRetry({
-      method: 'put',
-      url: `https://cloud-api.yandex.net/v1/disk/resources/publish?path=${encodeURIComponent(pathOnDisk)}`,
-      headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
-    });
-  } catch (error) {
-    console.error(`[uploadToYandexDisk] Ошибка публикации файла (${error.response?.status}):`, error.response?.data || error.message);
-    throw error;
-  }
+  // 3. Публикуем файл
+  await axiosWithRetry({
+    method: 'put',
+    url: `https://cloud-api.yandex.net/v1/disk/resources/publish?path=${encodeURIComponent(pathOnDisk)}`,
+    headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
+  });
 
-  let resourceRes;
-  try {
-    resourceRes = await axiosWithRetry({
-      method: 'get',
-      url: `https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(pathOnDisk)}`,
-      headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
-    });
-  } catch (error) {
-    console.error(`[uploadToYandexDisk] Ошибка получения инфо о файле (${error.response?.status}):`, error.response?.data || error.message);
-    throw error;
-  }
+  // 4. Получаем public_url
+  const resourceRes = await axiosWithRetry({
+    method: 'get',
+    url: `https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(pathOnDisk)}`,
+    headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
+  });
 
-  return { publicUrl: resourceRes.data.public_url, diskPath: pathOnDisk };
+  const publicUrl = resourceRes.data.public_url;
+
+  // 5. Сразу запрашиваем постоянную прямую ссылку (download href) и сохраняем её!
+  const getLinkRes = await axiosWithRetry({
+    method: 'get',
+    url: `https://cloud-api.yandex.net/v1/disk/resources/download?public_key=${encodeURIComponent(publicUrl)}`,
+    headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
+  });
+
+  return {
+    diskPath: pathOnDisk,
+    directUrl: getLinkRes.data.href
+  };
 }
 
 async function deleteFromYandexDisk(pathOnDisk) {
@@ -212,13 +191,10 @@ async function deleteFromYandexDisk(pathOnDisk) {
       headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
     });
   } catch (error) {
-    console.error('Ошибка при удалении с Яндекс Диска:', error.response?.data || error.message);
+    console.error('Ошибка при удалении с Яндекс Диска:', error.message);
   }
 }
 
-// ---------------------------------------------------------------------------
-// Полное состояние приложения (даты, шаблоны, комментарии, ссылки на видео)
-// ---------------------------------------------------------------------------
 app.get('/api/data', checkAuth, (req, res) => {
   res.status(200).json(store.cloudData);
 });
@@ -229,51 +205,42 @@ app.post('/api/data', checkAuth, (req, res) => {
   res.status(200).json({ success: true });
 });
 
-// ---------------------------------------------------------------------------
 // Загрузка видео
-// ---------------------------------------------------------------------------
 app.post('/api/workout', checkAuth, upload.any(), async (req, res) => {
   try {
     const key = req.body.key;
-    let videoUrl = null;
-    let thumbUrl = null;
+    if (key && !store.videoPaths[key]) {
+      store.videoPaths[key] = {};
+    }
 
     if (req.files && req.files.length > 0) {
-      if (key) {
-        if (!store.videoPaths[key]) store.videoPaths[key] = {};
-      }
-
       for (const file of req.files) {
         console.log(`Загрузка ${file.fieldname} на Яндекс Диск...`);
-        const { publicUrl, diskPath } = await uploadToYandexDisk(file.buffer, file.originalname);
+        const { diskPath, directUrl } = await uploadAndGetDirectLink(file.buffer, file.originalname);
 
         if (file.fieldname === 'video') {
-          videoUrl = publicUrl;
-          if (key) store.videoPaths[key].videoPath = diskPath;
+          if (key) {
+            store.videoPaths[key].videoPath = diskPath;
+            store.videoPaths[key].videoDirectUrl = directUrl; // Сохраняем готовую прямую ссылку!
+          }
         } else if (file.fieldname === 'thumbnail') {
-          thumbUrl = publicUrl;
-          if (key) store.videoPaths[key].thumbPath = diskPath;
+          if (key) {
+            store.videoPaths[key].thumbPath = diskPath;
+            store.videoPaths[key].thumbDirectUrl = directUrl; // Сохраняем готовую прямую ссылку!
+          }
         }
       }
       saveStore();
     }
 
-    const urls = (videoUrl || thumbUrl) ? { videoUrl, thumbUrl } : null;
-
-    res.status(200).json({
-      success: true,
-      message: 'Saved successfully to Yandex Disk',
-      urls
-    });
+    res.status(200).json({ success: true, message: 'Saved successfully' });
   } catch (error) {
     console.error('Ошибка при сохранении:', error.response?.data || error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// ---------------------------------------------------------------------------
-// Получение ссылки на медиа (через публичный ключ, решает проблему 403)
-// ---------------------------------------------------------------------------
+// Быстрая отдача готовой ссылки из памяти (без запросов к Яндексу при просмотре!)
 app.get('/api/media/:type/:key', async (req, res) => {
   if (req.query.token !== APP_TOKEN) {
     return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -284,35 +251,13 @@ app.get('/api/media/:type/:key', async (req, res) => {
   const paths = store.videoPaths[decodedKey];
   if (!paths) return res.status(404).json({ success: false, error: 'Not found' });
 
-  const diskPath = type === 'video' ? paths.videoPath : paths.thumbPath;
-  if (!diskPath || !YANDEX_OAUTH_TOKEN) return res.status(404).json({ success: false, error: 'Not found' });
+  const directUrl = type === 'video' ? paths.videoDirectUrl : paths.thumbDirectUrl;
+  if (!directUrl) return res.status(404).json({ success: false, error: 'Direct URL not found' });
 
-  try {
-    const resourceRes = await axiosWithRetry({
-      method: 'get',
-      url: `https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(diskPath)}`,
-      headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
-    });
-
-    const publicUrl = resourceRes.data.public_url;
-    if (!publicUrl) throw new Error('File is not published');
-
-    const getLinkRes = await axiosWithRetry({
-      method: 'get',
-      url: `https://cloud-api.yandex.net/v1/disk/resources/download?public_key=${encodeURIComponent(publicUrl)}`,
-      headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
-    });
-
-    res.status(200).json({ success: true, url: getLinkRes.data.href });
-  } catch (error) {
-    console.error('Ошибка получения прямой ссылки на медиа:', error.response?.data || error.message);
-    res.status(504).json({ success: false, error: 'Не удалось получить ссылку с Яндекс.Диска (таймаут или ошибка сети)' });
-  }
+  // Сразу отдаем сохраненную ссылку — никаких таймаутов!
+  res.status(200).json({ success: true, url: directUrl });
 });
 
-// ---------------------------------------------------------------------------
-// Удаление видео (реально удаляет файлы с Яндекс.Диска)
-// ---------------------------------------------------------------------------
 app.post('/api/delete-video', checkAuth, async (req, res) => {
   try {
     const { key } = req.body;
@@ -330,7 +275,7 @@ app.post('/api/delete-video', checkAuth, async (req, res) => {
 
     res.status(200).json({ success: true });
   } catch (error) {
-    console.error('Ошибка при удалении видео:', error.response?.data || error.message);
+    console.error('Ошибка при удалении видео:', error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -338,11 +283,7 @@ app.post('/api/delete-video', checkAuth, async (req, res) => {
 initStore().then(() => {
   const server = app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
-    if (!YANDEX_OAUTH_TOKEN) {
-      console.warn('ВНИМАНИЕ: переменная окружения YANDEX_TOKEN не задана — загрузка видео и сохранение данных на Диск работать не будут.');
-    }
   });
-
   server.timeout = 300000;
   server.keepAliveTimeout = 300000;
 });
