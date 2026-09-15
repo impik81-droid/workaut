@@ -50,8 +50,9 @@ function saveLocalStore() {
 async function downloadStoreFromYandex() {
   if (!YANDEX_OAUTH_TOKEN) return null;
   try {
+    const downloadParams = new URLSearchParams({ path: DATA_PATH_ON_DISK });
     const linkRes = await axios.get(
-      `https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(DATA_PATH_ON_DISK)}`,
+      `https://cloud-api.yandex.net/v1/disk/resources/download?${downloadParams.toString()}`,
       { headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` } }
     );
     const fileRes = await axios.get(linkRes.data.href);
@@ -68,8 +69,9 @@ async function downloadStoreFromYandex() {
 async function uploadStoreToYandex() {
   if (!YANDEX_OAUTH_TOKEN) return;
   try {
+    const uploadParams = new URLSearchParams({ path: DATA_PATH_ON_DISK, overwrite: 'true' });
     const uploadUrlRes = await axios.get(
-      `https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(DATA_PATH_ON_DISK)}&overwrite=true`,
+      `https://cloud-api.yandex.net/v1/disk/resources/upload?${uploadParams.toString()}`,
       { headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` } }
     );
     await axios.put(uploadUrlRes.data.href, JSON.stringify(store), {
@@ -127,7 +129,6 @@ async function axiosWithRetry(config, retries = 3) {
   }
 }
 
-// Загрузка и получение прямой ссылки через явное кодирование строки пути
 async function uploadAndGetDirectLink(buffer, originalname) {
   if (!YANDEX_OAUTH_TOKEN) {
     throw new Error('YANDEX_TOKEN не задан на сервере');
@@ -138,10 +139,11 @@ async function uploadAndGetDirectLink(buffer, originalname) {
 
   console.log(`Сформирован путь на диске: ${pathOnDisk}`);
 
-  // 1. Получаем урл для загрузки
+  // 1. Получаем урл для загрузки через URLSearchParams
+  const uploadParams = new URLSearchParams({ path: pathOnDisk, overwrite: 'true' });
   const uploadUrlRes = await axiosWithRetry({
     method: 'get',
-    url: `https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(pathOnDisk)}&overwrite=true`,
+    url: `https://cloud-api.yandex.net/v1/disk/resources/upload?${uploadParams.toString()}`,
     headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
   });
 
@@ -157,25 +159,28 @@ async function uploadAndGetDirectLink(buffer, originalname) {
   });
 
   // 3. Публикуем файл
+  const publishParams = new URLSearchParams({ path: pathOnDisk });
   await axiosWithRetry({
     method: 'put',
-    url: `https://cloud-api.yandex.net/v1/disk/resources/publish?path=${encodeURIComponent(pathOnDisk)}`,
+    url: `https://cloud-api.yandex.net/v1/disk/resources/publish?${publishParams.toString()}`,
     headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
   });
 
   // 4. Получаем public_url
+  const resourceParams = new URLSearchParams({ path: pathOnDisk });
   const resourceRes = await axiosWithRetry({
     method: 'get',
-    url: `https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(pathOnDisk)}`,
+    url: `https://cloud-api.yandex.net/v1/disk/resources?${resourceParams.toString()}`,
     headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
   });
 
   const publicUrl = resourceRes.data.public_url;
 
   // 5. Получаем постоянную прямую ссылку для скачивания/просмотра
+  const downloadParams = new URLSearchParams({ public_key: publicUrl });
   const getLinkRes = await axiosWithRetry({
     method: 'get',
-    url: `https://cloud-api.yandex.net/v1/disk/resources/download?public_key=${encodeURIComponent(publicUrl)}`,
+    url: `https://cloud-api.yandex.net/v1/disk/resources/download?${downloadParams.toString()}`,
     headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
   });
 
@@ -188,9 +193,10 @@ async function uploadAndGetDirectLink(buffer, originalname) {
 async function deleteFromYandexDisk(pathOnDisk) {
   if (!pathOnDisk || !YANDEX_OAUTH_TOKEN) return;
   try {
+    const deleteParams = new URLSearchParams({ path: pathOnDisk, permanently: 'true' });
     await axiosWithRetry({
       method: 'delete',
-      url: `https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(pathOnDisk)}&permanently=true`,
+      url: `https://cloud-api.yandex.net/v1/disk/resources?${deleteParams.toString()}`,
       headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
     });
   } catch (error) {
