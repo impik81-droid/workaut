@@ -127,22 +127,27 @@ async function axiosWithRetry(config, retries = 3) {
   }
 }
 
-// Загрузка файла и сразу получение прямой скачиваемой ссылки
-async function uploadAndGetDirectLink(buffer, filename) {
+// Надежная загрузка и получение прямой ссылки
+async function uploadAndGetDirectLink(buffer, originalname) {
   if (!YANDEX_OAUTH_TOKEN) {
     throw new Error('YANDEX_TOKEN не задан на сервере');
   }
 
-  const pathOnDisk = `/workaut/${Date.now()}-${filename}`;
+  // Очищаем имя файла от пробелов и спецсимволов, чтобы Яндекс не ругался на путь
+  const safeName = Buffer.from(originalname, 'latin1').toString('utf8').replace(/[^a-zA-Z0-9_.-]/g, '_');
+  const pathOnDisk = `/workaut/${Date.now()}-${safeName}`;
 
-  // 1. Получаем урл для загрузки
+  console.екс(`Сформирован путь на диске: ${pathOnDisk}`);
+
+  // 1. Получаем урл для загрузки (параметр path передаем через params в axios для корректного кодирования)
   const uploadUrlRes = await axiosWithRetry({
     method: 'get',
-    url: `https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(pathOnDisk)}&overwrite=true`,
+    url: 'https://cloud-api.yandex.net/v1/disk/resources/upload',
+    params: { path: pathOnDisk, overwrite: true },
     headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
   });
 
-  // 2. Загружаем файл
+  // 2. Загружаем сам файл
   await axiosWithRetry({
     method: 'put',
     url: uploadUrlRes.data.href,
@@ -156,23 +161,26 @@ async function uploadAndGetDirectLink(buffer, filename) {
   // 3. Публикуем файл
   await axiosWithRetry({
     method: 'put',
-    url: `https://cloud-api.yandex.net/v1/disk/resources/publish?path=${encodeURIComponent(pathOnDisk)}`,
+    url: 'https://cloud-api.yandex.net/v1/disk/resources/publish',
+    params: { path: pathOnDisk },
     headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
   });
 
   // 4. Получаем public_url
   const resourceRes = await axiosWithRetry({
     method: 'get',
-    url: `https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(pathOnDisk)}`,
+    url: 'https://cloud-api.yandex.net/v1/disk/resources',
+    params: { path: pathOnDisk },
     headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
   });
 
   const publicUrl = resourceRes.data.public_url;
 
-  // 5. Сразу запрашиваем постоянную прямую ссылку (download href) и сохраняем её!
+  // 5. Получаем постоянную прямую ссылку для скачивания/просмотра
   const getLinkRes = await axiosWithRetry({
     method: 'get',
-    url: `https://cloud-api.yandex.net/v1/disk/resources/download?public_key=${encodeURIComponent(publicUrl)}`,
+    url: 'https://cloud-api.yandex.net/v1/disk/resources/download',
+    params: { public_key: publicUrl },
     headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
   });
 
@@ -187,7 +195,8 @@ async function deleteFromYandexDisk(pathOnDisk) {
   try {
     await axiosWithRetry({
       method: 'delete',
-      url: `https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(pathOnDisk)}&permanently=true`,
+      url: 'https://cloud-api.yandex.net/v1/disk/resources',
+      params: { path: pathOnDisk, permanently: true },
       headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
     });
   } catch (error) {
@@ -221,12 +230,12 @@ app.post('/api/workout', checkAuth, upload.any(), async (req, res) => {
         if (file.fieldname === 'video') {
           if (key) {
             store.videoPaths[key].videoPath = diskPath;
-            store.videoPaths[key].videoDirectUrl = directUrl; // Сохраняем готовую прямую ссылку!
+            store.videoPaths[key].videoDirectUrl = directUrl;
           }
         } else if (file.fieldname === 'thumbnail') {
           if (key) {
             store.videoPaths[key].thumbPath = diskPath;
-            store.videoPaths[key].thumbDirectUrl = directUrl; // Сохраняем готовую прямую ссылку!
+            store.videoPaths[key].thumbDirectUrl = directUrl;
           }
         }
       }
@@ -240,7 +249,6 @@ app.post('/api/workout', checkAuth, upload.any(), async (req, res) => {
   }
 });
 
-// Быстрая отдача готовой ссылки из памяти (без запросов к Яндексу при просмотре!)
 app.get('/api/media/:type/:key', async (req, res) => {
   if (req.query.token !== APP_TOKEN) {
     return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -254,7 +262,6 @@ app.get('/api/media/:type/:key', async (req, res) => {
   const directUrl = type === 'video' ? paths.videoDirectUrl : paths.thumbDirectUrl;
   if (!directUrl) return res.status(404).json({ success: false, error: 'Direct URL not found' });
 
-  // Сразу отдаем сохраненную ссылку — никаких таймаутов!
   res.status(200).json({ success: true, url: directUrl });
 });
 
