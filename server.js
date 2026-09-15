@@ -127,7 +127,7 @@ async function axiosWithRetry(config, retries = 3) {
   }
 }
 
-// Надежная загрузка и получение прямой ссылки
+// Загрузка и получение прямой ссылки через явное кодирование строки пути
 async function uploadAndGetDirectLink(buffer, originalname) {
   if (!YANDEX_OAUTH_TOKEN) {
     throw new Error('YANDEX_TOKEN не задан на сервере');
@@ -141,8 +141,7 @@ async function uploadAndGetDirectLink(buffer, originalname) {
   // 1. Получаем урл для загрузки
   const uploadUrlRes = await axiosWithRetry({
     method: 'get',
-    url: 'https://cloud-api.yandex.net/v1/disk/resources/upload',
-    params: { path: pathOnDisk, overwrite: true },
+    url: `https://cloud-api.yandex.net/v1/disk/resources/upload?path=${encodeURIComponent(pathOnDisk)}&overwrite=true`,
     headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
   });
 
@@ -160,16 +159,14 @@ async function uploadAndGetDirectLink(buffer, originalname) {
   // 3. Публикуем файл
   await axiosWithRetry({
     method: 'put',
-    url: 'https://cloud-api.yandex.net/v1/disk/resources/publish',
-    params: { path: pathOnDisk },
+    url: `https://cloud-api.yandex.net/v1/disk/resources/publish?path=${encodeURIComponent(pathOnDisk)}`,
     headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
   });
 
   // 4. Получаем public_url
   const resourceRes = await axiosWithRetry({
     method: 'get',
-    url: 'https://cloud-api.yandex.net/v1/disk/resources',
-    params: { path: pathOnDisk },
+    url: `https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(pathOnDisk)}`,
     headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
   });
 
@@ -178,8 +175,7 @@ async function uploadAndGetDirectLink(buffer, originalname) {
   // 5. Получаем постоянную прямую ссылку для скачивания/просмотра
   const getLinkRes = await axiosWithRetry({
     method: 'get',
-    url: 'https://cloud-api.yandex.net/v1/disk/resources/download',
-    params: { public_key: publicUrl },
+    url: `https://cloud-api.yandex.net/v1/disk/resources/download?public_key=${encodeURIComponent(publicUrl)}`,
     headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
   });
 
@@ -194,8 +190,7 @@ async function deleteFromYandexDisk(pathOnDisk) {
   try {
     await axiosWithRetry({
       method: 'delete',
-      url: 'https://cloud-api.yandex.net/v1/disk/resources',
-      params: { path: pathOnDisk, permanently: true },
+      url: `https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(pathOnDisk)}&permanently=true`,
       headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
     });
   } catch (error) {
