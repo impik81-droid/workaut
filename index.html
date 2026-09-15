@@ -324,12 +324,6 @@
 
                 let videoBlock = '';
                 if (videoData) {
-                    // Ссылки строятся динамически через сервер: он каждый раз запрашивает
-                    // у Яндекс.Диска свежую прямую ссылку на файл (public_url для этого не годится).
-                    const encodedKey = encodeURIComponent(itemKey);
-                    const fullVideoUrl = `${SERVER_URL}/api/media/video/${encodedKey}?token=${APP_TOKEN}`;
-                    const fullThumbUrl = `${SERVER_URL}/api/media/thumbnail/${encodedKey}?token=${APP_TOKEN}`;
-
                     const commentsList = cloudData.comments[itemKey] || [];
                     let commentsHtml = '';
                     commentsList.forEach((c) => {
@@ -341,15 +335,17 @@
                         `;
                     });
 
+                    // Ссылку на файл получаем асинхронно через JSON (см. loadThumbnail/openVideoModal) —
+                    // сервер каждый раз запрашивает у Яндекс.Диска свежую временную ссылку.
                     videoBlock = `
                         <div class="video-preview-container">
-                            <div class="thumbnail-wrapper" onclick="openVideoModal('${fullVideoUrl}')">
-                                <img src="${fullThumbUrl}" class="thumbnail-img" alt="Видео" onerror="this.style.display='none'; this.nextElementSibling.style.background='#333';">
+                            <div class="thumbnail-wrapper" id="thumbWrap_${exIndex}" onclick="openVideoModal('${itemKey}')">
+                                <img id="thumbImg_${exIndex}" class="thumbnail-img" alt="Видео" style="display:none;" onerror="this.style.display='none';">
                                 <div class="play-overlay">▶</div>
                             </div>
                             <div class="video-info-block">
                                 <div class="video-actions-row">
-                                    <button class="action-btn" onclick="openVideoModal('${fullVideoUrl}')">👁 См. видео</button>
+                                    <button class="action-btn" onclick="openVideoModal('${itemKey}')">👁 См. видео</button>
                                     <button class="action-btn delete" onclick="deleteVideo(${exIndex})">🗑 Удалить</button>
                                 </div>
                             </div>
@@ -383,32 +379,59 @@
                 `;
                 container.appendChild(card);
             });
+
+            loadVisibleThumbnails(currentProgram);
         }
 
-        window.openVideoModal = async function(url) {
+        // Запрашивает у сервера свежую временную ссылку на файл (video/thumbnail) для данного ключа.
+        // Возвращает { success, url } или { success: false, error }.
+        async function fetchMediaUrl(type, itemKey) {
+            const encodedKey = encodeURIComponent(itemKey);
+            try {
+                const resp = await fetch(`${SERVER_URL}/api/media/${type}/${encodedKey}?token=${APP_TOKEN}`);
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    return { success: false, error: data.error || `HTTP ${resp.status}` };
+                }
+                return { success: true, url: data.url };
+            } catch (e) {
+                return { success: false, error: e.message };
+            }
+        }
+
+        // После рендера подгружаем превью для всех упражнений с видео на текущем экране.
+        function loadVisibleThumbnails(currentProgram) {
+            currentProgram.exercises.forEach(async (ex, exIndex) => {
+                const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
+                if (!cloudData.videos[itemKey]) return;
+
+                const imgEl = document.getElementById(`thumbImg_${exIndex}`);
+                if (!imgEl) return;
+
+                const result = await fetchMediaUrl('thumbnail', itemKey);
+                if (result.success) {
+                    imgEl.src = result.url;
+                    imgEl.style.display = 'block';
+                }
+                // при ошибке просто оставляем тёмную плитку с иконкой ▶ — не страшно
+            });
+        }
+
+        window.openVideoModal = async function(itemKey) {
             const modal = document.getElementById('videoModal');
             const videoElem = document.getElementById('modalVideo');
 
             modal.style.display = 'flex';
-            videoElem.poster = '';
             videoElem.src = '';
 
-            // Сервер на каждый запрос заново получает временную ссылку у Яндекс.Диска.
-            // Если сеть подвисла — проверим это заранее, а не будем молча зависать с пустым плеером.
-            try {
-                const checkResp = await fetch(url, { method: 'HEAD' });
-                if (!checkResp.ok) {
-                    alert('Не удалось загрузить видео (сервер ответил ошибкой). Попробуйте ещё раз через минуту.');
-                    modal.style.display = 'none';
-                    return;
-                }
-            } catch (e) {
+            const result = await fetchMediaUrl('video', itemKey);
+            if (!result.success) {
                 alert('Не удалось загрузить видео. Проверьте соединение и попробуйте ещё раз.');
                 modal.style.display = 'none';
                 return;
             }
 
-            videoElem.src = url;
+            videoElem.src = result.url;
             videoElem.play();
         }
 
