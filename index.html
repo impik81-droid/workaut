@@ -113,6 +113,17 @@
         .set-input:focus { outline: none; border-color: var(--accent); }
         .set-checkbox { width: 19px; height: 19px; cursor: pointer; accent-color: var(--accent); flex-shrink: 0; }
         .completed { opacity: 0.55; }
+        .set-remove-btn {
+            width: 22px; height: 22px; flex-shrink: 0; border-radius: 6px; border: none;
+            background: rgba(255,84,112,0.12); color: var(--danger); font-size: 12px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center; padding: 0; font-family: inherit;
+        }
+        .set-remove-spacer { width: 22px; flex-shrink: 0; }
+        .add-set-btn {
+            width: 100%; padding: 9px; margin-top: 2px; border: 1px dashed var(--line); border-radius: 8px;
+            background: transparent; color: var(--text-dim); font-size: 12px; cursor: pointer; font-family: inherit;
+        }
+        .add-set-btn:hover { border-color: var(--accent); color: var(--accent); }
 
         .video-preview-container {
             margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; display: flex; align-items: center; gap: 12px;
@@ -436,6 +447,62 @@
             return { weight: '', reps: '', checked: false };
         }
 
+        // Количество подходов для конкретного упражнения в этот день: по умолчанию — из шаблона
+        // программы (ex.sets), но пользователь может добавить/убрать подходы именно для этого дня.
+        function getSetCount(dayData, exIndex, ex) {
+            if (dayData[exIndex] && typeof dayData[exIndex]._count === 'number') {
+                return dayData[exIndex]._count;
+            }
+            return ex.sets;
+        }
+
+        function ensureExerciseEntry(exIndex) {
+            if (!cloudData.dates[selectedDate]) cloudData.dates[selectedDate] = { programId: activeProgramId };
+            if (!cloudData.dates[selectedDate][activeProgramId]) cloudData.dates[selectedDate][activeProgramId] = {};
+            if (!cloudData.dates[selectedDate][activeProgramId][exIndex]) cloudData.dates[selectedDate][activeProgramId][exIndex] = {};
+            return cloudData.dates[selectedDate][activeProgramId][exIndex];
+        }
+
+        window.addSet = function(exIndex) {
+            const currentProgram = programData.find(p => p.id === activeProgramId) || programData[0];
+            const ex = currentProgram.exercises[exIndex];
+            const dayData = cloudData.dates[selectedDate]?.[activeProgramId] || {};
+            const currentCount = getSetCount(dayData, exIndex, ex);
+
+            const entry = ensureExerciseEntry(exIndex);
+            entry._count = currentCount + 1;
+            // новый подход стартует пустым (можно опереться на последний введённый вес вручную)
+            entry[`set_${currentCount}`] = { weight: '', reps: '', checked: false };
+
+            syncWithServer();
+            renderWorkouts();
+        }
+
+        window.removeSet = function(exIndex, setIndexToRemove) {
+            const currentProgram = programData.find(p => p.id === activeProgramId) || programData[0];
+            const ex = currentProgram.exercises[exIndex];
+            const dayData = cloudData.dates[selectedDate]?.[activeProgramId] || {};
+            const currentCount = getSetCount(dayData, exIndex, ex);
+            if (currentCount <= 1) return;
+
+            const entry = ensureExerciseEntry(exIndex);
+
+            // Собираем текущие подходы в массив, убираем нужный, переиндексируем оставшиеся подряд
+            const sets = [];
+            for (let s = 0; s < currentCount; s++) {
+                sets.push(entry[`set_${s}`] || getLastData(activeProgramId, exIndex, s));
+            }
+            sets.splice(setIndexToRemove, 1);
+
+            // чистим старые ключи и записываем заново
+            for (let s = 0; s < currentCount; s++) delete entry[`set_${s}`];
+            sets.forEach((setData, i) => { entry[`set_${i}`] = setData; });
+            entry._count = sets.length;
+
+            syncWithServer();
+            renderWorkouts();
+        }
+
         function renderTabs() {
             const container = document.getElementById('tabsContainer');
             container.innerHTML = '';
@@ -462,11 +529,16 @@
                 card.style.setProperty('--program-color', currentProgram.color);
 
                 let setsHtml = '';
-                for (let s = 0; s < ex.sets; s++) {
+                const setCount = getSetCount(dayData, exIndex, ex);
+                for (let s = 0; s < setCount; s++) {
                     const setKey = `set_${s}`;
                     let setData = dayData[exIndex] && dayData[exIndex][setKey]
                         ? dayData[exIndex][setKey]
                         : getLastData(activeProgramId, exIndex, s);
+
+                    const removeBtn = setCount > 1
+                        ? `<button class="set-remove-btn" onclick="removeSet(${exIndex}, ${s})" title="Убрать подход">✕</button>`
+                        : `<span class="set-remove-spacer"></span>`;
 
                     setsHtml += `
                         <div class="set-row ${setData.checked ? 'completed' : ''}" id="row_${exIndex}_${s}">
@@ -474,9 +546,11 @@
                             <input type="number" class="set-input" placeholder="Вес" value="${setData.weight || ''}" oninput="updateData(${exIndex}, ${s}, 'weight', this.value)">
                             <input type="number" class="set-input" placeholder="Повт" value="${setData.reps || ''}" oninput="updateData(${exIndex}, ${s}, 'reps', this.value)">
                             <input type="checkbox" class="set-checkbox" ${setData.checked ? 'checked' : ''} onchange="toggleCheck(${exIndex}, ${s}, this.checked)">
+                            ${removeBtn}
                         </div>
                     `;
                 }
+                setsHtml += `<button class="add-set-btn" onclick="addSet(${exIndex})">+ Добавить подход</button>`;
 
                 const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
                 const videoData = cloudData.videos[itemKey];
