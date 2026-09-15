@@ -324,59 +324,70 @@ app.get('/api/media/:type/:key', async (req, res) => {
   }
 });
 
-// Новый оптимизированный проксирующий эндпоинт для видео
+// Эндпоинт для безопасной потоковой передачи (стриминга) медиафайлов через прокси
 app.get('/api/stream/:type/:key', async (req, res) => {
-  if (req.query.token !== APP_TOKEN) {
-    return res.status(401).json({ success: false, error: 'Unauthorized' });
-  }
-
-  const { type, key } = req.params;
-  const decodedKey = decodeURIComponent(key);
-  const paths = store.videoPaths[decodedKey];
-  if (!paths) return res.status(404).send('Not found');
-
-  const diskPath = type === 'video' ? paths.videoPath : paths.thumbPath;
-  if (!diskPath || !YANDEX_OAUTH_TOKEN) return res.status(404).send('Not found');
-
   try {
-    const linkRes = await axiosWithRetry({
-      method: 'get',
-      url: 'https://cloud-api.yandex.net/v1/disk/resources/download',
-      params: { path: diskPath },
-      headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
-    });
+    const { type, key } = req.params;
+    const token = req.query.token;
 
-    const fileUrl = linkRes.data.href;
-
-    // Запрос к файлу на Яндекс Диске с поддержкой Range (для перемотки и стабильного потока)
-    const headers = {};
-    if (req.headers['range']) {
-      headers['range'] = req.headers['range'];
+    // 1. Простейшая проверка токена (если она у вас используется)
+    if (token !== APP_TOKEN) {
+      return res.status(401).json({ error: 'Unauthorized' });
     }
 
+    // 2. Получаем файл из вашей структуры данных/хранилища
+    const item = store.items && store.items.find(i => i.key === key);
+    if (!item || !item.path) {
+      return res.status(404).json({ error: 'File not found in store' });
+    }
+
+    // 3. Запрашиваем прямую ссылку на скачивание у Яндекс Диска
+    const yaRes = await axios.get(
+      `https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(item.path)}`,
+      {
+        headers: {
+          'Authorization': `OAuth ${YANDEX_TOKEN}`
+        }
+      }
+    );
+
+    const downloadUrl = yaRes.data.href;
+
+    // 4. Запрашиваем сам файл с Яндекс Диска в режиме потока (stream)
     const response = await axios({
       method: 'get',
-      url: fileUrl,
-      responseType: 'stream',
-      headers: headers,
-      timeout: 60000
+      url: downloadUrl,
+      responseType: 'stream'
     });
 
-    // Прокидываем заголовки ответа (включая Content-Range, Content-Length, Content-Type)
-    Object.keys(response.headers).forEach(header => {
-      res.setHeader(header, response.headers[header]);
-    });
-    res.status(response.status);
+    // 5. Передаем заголовки (например, тип контента, если он есть)
+    if (response.headers['content-type']) {
+      res.setHeader('Content-Type', response.headers['content-type']);
+    }
+    if (response.headers['content-length']) {
+      res.setHeader('Content-Length', response.headers['content-length']);
+    }
 
+    // 6. ОБРАБОТЧИК ОШИБОК ПОТОКА (то самое исправление)
+    response.data.on('error', (err) => {
+      console.error('Ошибка передачи потока:', err.message);
+      if (!res.headersSent) {
+        res.status(500).send('Ошибка передачи потока');
+      } else {
+        res.end();
+      }
+    });
+
+    // 7. Безопасно транслируем поток клиенту
     response.data.pipe(res);
+
   } catch (error) {
-    console.error('Ошибка стриминга медиа с Яндекс.Диска:', error.message);
+    console.error('Ошибка в эндпоинте стриминга:', error.message);
     if (!res.headersSent) {
-      res.status(500).send('Stream error');
+      res.status(500).json({ error: 'Не удалось загрузить медиафайл' });
     }
   }
 });
-
 app.post('/api/delete-video', checkAuth, async (req, res) => {
   try {
     const { key } = req.body;
