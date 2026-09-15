@@ -133,13 +133,12 @@ async function uploadAndGetDirectLink(buffer, originalname) {
     throw new Error('YANDEX_TOKEN не задан на сервере');
   }
 
-  // Очищаем имя файла от пробелов и спецсимволов, чтобы Яндекс не ругался на путь
   const safeName = Buffer.from(originalname, 'latin1').toString('utf8').replace(/[^a-zA-Z0-9_.-]/g, '_');
   const pathOnDisk = `/workaut/${Date.now()}-${safeName}`;
 
-  console.екс(`Сформирован путь на диске: ${pathOnDisk}`);
+  console.log(`Сформирован путь на диске: ${pathOnDisk}`);
 
-  // 1. Получаем урл для загрузки (параметр path передаем через params в axios для корректного кодирования)
+  // 1. Получаем урл для загрузки
   const uploadUrlRes = await axiosWithRetry({
     method: 'get',
     url: 'https://cloud-api.yandex.net/v1/disk/resources/upload',
