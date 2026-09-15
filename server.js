@@ -69,7 +69,6 @@ async function downloadStoreFromYandex() {
       videoPaths: data.videoPaths || {}
     };
   } catch (e) {
-    // Файла ещё нет на Диске (первый запуск) или другая ошибка — не критично
     console.log('Не удалось загрузить data.json с Яндекс.Диска (возможно, его ещё нет):', e.response?.status || e.message);
     return null;
   }
@@ -105,7 +104,6 @@ async function initStore() {
 }
 
 function saveStore() {
-  // небольшой дебаунс, чтобы не писать при каждом нажатии клавиши
   clearTimeout(saveTimeout);
   saveTimeout = setTimeout(() => {
     saveLocalStore();
@@ -128,9 +126,6 @@ app.get('/', (req, res) => {
   res.send('WorkAut Server with Yandex Disk is running!');
 });
 
-// Хелпер: axios-запрос с таймаутом и повторными попытками при сетевых сбоях —
-// связность между Render и Яндекс.Диском иногда подводит (таймауты, недоступность IPv6 и т.п.).
-// family: 4 — не тратим время на заведомо недоступный на Render IPv6.
 async function axiosWithRetry(config, retries = 2) {
   try {
     return await axios({ timeout: 15000, family: 4, ...config });
@@ -143,6 +138,7 @@ async function axiosWithRetry(config, retries = 2) {
     throw err;
   }
 }
+
 // ---------------------------------------------------------------------------
 // Яндекс.Диск
 // ---------------------------------------------------------------------------
@@ -276,12 +272,7 @@ app.post('/api/workout', checkAuth, upload.any(), async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Отдача видео/превью: public_url с Яндекс.Диска — это страница предпросмотра,
-// а не прямая ссылка на файл, поэтому <video>/<img> не могут её использовать напрямую.
-// Отдаём JSON со свежей временной ссылкой (а не редирект!) — редирект на чужой домен
-// ломает fetch() на фронте из-за CORS (у Яндекса нет разрешающих заголовков для сторонних доменов).
-// Фронт сам подставляет полученную ссылку в src у <video>/<img> — тегам media CORS не мешает.
-// Токен передаётся через query-параметр, т.к. это обычный fetch с нашего фронта.
+// Получение ссылки на медиа (через публичный ключ, решает проблему 403)
 // ---------------------------------------------------------------------------
 app.get('/api/media/:type/:key', async (req, res) => {
   if (req.query.token !== APP_TOKEN) {
@@ -297,12 +288,22 @@ app.get('/api/media/:type/:key', async (req, res) => {
   if (!diskPath || !YANDEX_OAUTH_TOKEN) return res.status(404).json({ success: false, error: 'Not found' });
 
   try {
-    const linkRes = await axiosWithRetry({
+    const resourceRes = await axiosWithRetry({
       method: 'get',
-      url: `https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(diskPath)}`,
+      url: `https://cloud-api.yandex.net/v1/disk/resources?path=${encodeURIComponent(diskPath)}`,
       headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
     });
-    res.status(200).json({ success: true, url: linkRes.data.href });
+
+    const publicUrl = resourceRes.data.public_url;
+    if (!publicUrl) throw new Error('File is not published');
+
+    const getLinkRes = await axiosWithRetry({
+      method: 'get',
+      url: `https://cloud-api.yandex.net/v1/disk/resources/download?public_key=${encodeURIComponent(publicUrl)}`,
+      headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
+    });
+
+    res.status(200).json({ success: true, url: getLinkRes.data.href });
   } catch (error) {
     console.error('Ошибка получения прямой ссылки на медиа:', error.response?.data || error.message);
     res.status(504).json({ success: false, error: 'Не удалось получить ссылку с Яндекс.Диска (таймаут или ошибка сети)' });
