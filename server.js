@@ -47,7 +47,6 @@ function saveLocalStore() {
   });
 }
 
-// Защита от одновременных запросов к Яндекс Диску (решает ошибку блокировки ресурса)
 let isDiskBusy = false;
 async function runWithDiskLock(fn) {
   while (isDiskBusy) {
@@ -65,12 +64,10 @@ async function downloadStoreFromYandex() {
   if (!YANDEX_OAUTH_TOKEN) return null;
   return await runWithDiskLock(async () => {
     try {
+      const params = new URLSearchParams({ path: DATA_PATH_ON_DISK });
       const linkRes = await axios.get(
-        'https://cloud-api.yandex.net/v1/disk/resources/download',
-        {
-          params: { path: DATA_PATH_ON_DISK },
-          headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
-        }
+        `https://cloud-api.yandex.net/v1/disk/resources/download?${params.toString()}`,
+        { headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` } }
       );
       const fileRes = await axios.get(linkRes.data.href);
       const data = fileRes.data;
@@ -88,12 +85,10 @@ async function uploadStoreToYandex() {
   if (!YANDEX_OAUTH_TOKEN) return;
   await runWithDiskLock(async () => {
     try {
+      const params = new URLSearchParams({ path: DATA_PATH_ON_DISK, overwrite: 'true' });
       const uploadUrlRes = await axios.get(
-        'https://cloud-api.yandex.net/v1/disk/resources/upload',
-        {
-          params: { path: DATA_PATH_ON_DISK, overwrite: true },
-          headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
-        }
+        `https://cloud-api.yandex.net/v1/disk/resources/upload?${params.toString()}`,
+        { headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` } }
       );
       await axios.put(uploadUrlRes.data.href, JSON.stringify(store), {
         headers: { 'Content-Type': 'application/json' }
@@ -162,15 +157,15 @@ async function uploadAndGetDirectLink(buffer, originalname) {
   console.log(`Сформирован путь на диске: ${pathOnDisk}`);
 
   return await runWithDiskLock(async () => {
-    // 1. Получаем урл для загрузки
+    // 1. Получаем урл для загрузки через URLSearchParams
+    const uploadParams = new URLSearchParams({ path: pathOnDisk, overwrite: 'true' });
     const uploadUrlRes = await axiosWithRetry({
       method: 'get',
-      url: 'https://cloud-api.yandex.net/v1/disk/resources/upload',
-      params: { path: pathOnDisk, overwrite: true },
+      url: `https://cloud-api.yandex.net/v1/disk/resources/upload?${uploadParams.toString()}`,
       headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
     });
 
-    // 2. Загружаем сам файл (без params, т.к. загрузка идет по внешней ссылке Yandex)
+    // 2. Загружаем сам файл
     await axiosWithRetry({
       method: 'put',
       url: uploadUrlRes.data.href,
@@ -182,28 +177,28 @@ async function uploadAndGetDirectLink(buffer, originalname) {
     });
 
     // 3. Публикуем файл
+    const publishParams = new URLSearchParams({ path: pathOnDisk });
     await axiosWithRetry({
       method: 'put',
-      url: 'https://cloud-api.yandex.net/v1/disk/resources/publish',
-      params: { path: pathOnDisk },
+      url: `https://cloud-api.yandex.net/v1/disk/resources/publish?${publishParams.toString()}`,
       headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
     });
 
     // 4. Получаем public_url
+    const resourceParams = new URLSearchParams({ path: pathOnDisk });
     const resourceRes = await axiosWithRetry({
       method: 'get',
-      url: 'https://cloud-api.yandex.net/v1/disk/resources',
-      params: { path: pathOnDisk },
+      url: `https://cloud-api.yandex.net/v1/disk/resources?${resourceParams.toString()}`,
       headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
     });
 
     const publicUrl = resourceRes.data.public_url;
 
     // 5. Получаем постоянную прямую ссылку
+    const getLinkParams = new URLSearchParams({ public_key: publicUrl });
     const getLinkRes = await axiosWithRetry({
       method: 'get',
-      url: 'https://cloud-api.yandex.net/v1/disk/resources/download',
-      params: { public_key: publicUrl },
+      url: `https://cloud-api.yandex.net/v1/disk/resources/download?${getLinkParams.toString()}`,
       headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
     });
 
@@ -218,10 +213,10 @@ async function deleteFromYandexDisk(pathOnDisk) {
   if (!pathOnDisk || !YANDEX_OAUTH_TOKEN) return;
   await runWithDiskLock(async () => {
     try {
+      const deleteParams = new URLSearchParams({ path: pathOnDisk, permanently: 'true' });
       await axiosWithRetry({
         method: 'delete',
-        url: 'https://cloud-api.yandex.net/v1/disk/resources',
-        params: { path: pathOnDisk, permanently: true },
+        url: `https://cloud-api.yandex.net/v1/disk/resources?${deleteParams.toString()}`,
         headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
       });
     } catch (error) {
@@ -293,7 +288,7 @@ app.get('/api/media/:type/:key', async (req, res) => {
 
 app.post('/api/delete-video', checkAuth, async (req, res) => {
   try {
-    const { key } = req.body;
+    const { key }  = req.body;
     if (!key) {
       return res.status(400).json({ success: false, error: 'key is required' });
     }
@@ -301,7 +296,7 @@ app.post('/api/delete-video', checkAuth, async (req, res) => {
     const paths = store.videoPaths[key];
     if (paths) {
       await deleteFromYandexDisk(paths.videoPath);
-      await deleteFromYandexDisk(paths.thumbPath);
+      await deleteFromYungeonsDisk ? deleteFromYandexDisk(paths.thumbPath) : await deleteFromYandexDisk(paths.thumbPath);
       delete store.videoPaths[key];
       saveStore();
     }
