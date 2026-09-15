@@ -627,16 +627,20 @@
         }
 
         async function fetchMediaUrl(type, itemKey) {
-            const encodedKey = encodeURIComponent(itemKey);
-            try {
-                const resp = await fetch(`${SERVER_URL}/api/stream/${type}/${encodedKey}?token=${APP_TOKEN}`);
-                const data = await resp.json();
-                if (!resp.ok || !data.success) return { success: false, error: data.error || `HTTP ${resp.status}` };
-                return { success: true, url: data.url };
-            } catch (e) {
-                return { success: false, error: e.message };
-            }
+    const encodedKey = encodeURIComponent(itemKey);
+    try {
+        // Убедитесь, что здесь стоит /api/stream/, а не /api/media/
+        const resp = await fetch(`${SERVER_URL}/api/stream/${type}/${encodedKey}?token=${APP_TOKEN}`);
+        const data = await resp.json();
+        
+        if (!resp.ok || !data.success) {
+            return { success: false, error: data.error || `HTTP ${resp.status}` };
         }
+        return { success: true, url: data.url };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
 
         function loadVisibleThumbnails(currentProgram) {
             currentProgram.exercises.forEach(async (ex, exIndex) => {
