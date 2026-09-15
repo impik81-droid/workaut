@@ -9,13 +9,9 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Локальный файл — используется как быстрый кэш и запасной вариант.
-// Но основное хранилище — Яндекс.Диск, т.к. локальный диск на Render эфемерный
-// и стирается при рестарте/редеплое/пробуждении после сна.
 const DATA_FILE = path.join(__dirname, 'data.json');
 const DATA_PATH_ON_DISK = '/workaut/app-data.json';
 
-// Простой общий секрет для защиты API. По умолчанию совпадает с паролем на фронте (1234),
-// чтобы всё сразу работало. Рекомендуется задать свой APP_TOKEN в переменных окружения Render.
 const APP_TOKEN = process.env.APP_TOKEN || '1234';
 const YANDEX_OAUTH_TOKEN = process.env.YANDEX_TOKEN;
 
@@ -164,7 +160,7 @@ async function axiosWithRetry(config, retries = 2) {
 }
 
 // ---------------------------------------------------------------------------
-// Яндекс.Диск (Работа с медиафайлами через встроенный params во избежание ошибок пути)
+// Яндекс.Диск (Работа с медиафайлами)
 // ---------------------------------------------------------------------------
 async function uploadToYandexDisk(buffer, filename) {
   if (!YANDEX_OAUTH_TOKEN) {
@@ -300,6 +296,7 @@ app.post('/api/workout', checkAuth, upload.any(), async (req, res) => {
   }
 });
 
+// Старый эндпоинт (оставляем для совместимости)
 app.get('/api/media/:type/:key', async (req, res) => {
   if (req.query.token !== APP_TOKEN) {
     return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -324,6 +321,52 @@ app.get('/api/media/:type/:key', async (req, res) => {
   } catch (error) {
     console.error('Ошибка получения прямой ссылки на медиа:', error.response?.data || error.message);
     res.status(504).json({ success: false, error: 'Не удалось получить ссылку с Яндекс.Диска (таймаут или ошибка сети)' });
+  }
+});
+
+// Новый проксирующий эндпоинт для обхода 403 ошибки Яндекс.Диска
+app.get('/api/stream/:type/:key', async (req, res) => {
+  if (req.query.token !== APP_TOKEN) {
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+  }
+
+  const { type, key } = req.params;
+  const decodedKey = decodeURIComponent(key);
+  const paths = store.videoPaths[decodedKey];
+  if (!paths) return res.status(404).send('Not found');
+
+  const diskPath = type === 'video' ? paths.videoPath : paths.thumbPath;
+  if (!diskPath || !YANDEX_OAUTH_TOKEN) return res.status(404).send('Not found');
+
+  try {
+    const linkRes = await axiosWithRetry({
+      method: 'get',
+      url: 'https://cloud-api.yandex.net/v1/disk/resources/download',
+      params: { path: diskPath },
+      headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
+    });
+
+    const fileUrl = linkRes.data.href;
+
+    const response = await axios({
+      method: 'get',
+      url: fileUrl,
+      responseType: 'stream'
+    });
+
+    if (response.headers['content-type']) {
+      res.setHeader('Content-Type', response.headers['content-type']);
+    }
+    if (response.headers['content-length']) {
+      res.setHeader('Content-Length', response.headers['content-length']);
+    }
+
+    response.data.pipe(res);
+  } catch (error) {
+    console.error('Ошибка стриминга медиа с Яндекс.Диска:', error.message);
+    if (!res.headersSent) {
+      res.status(500).send('Stream error');
+    }
   }
 });
 
