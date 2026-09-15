@@ -1,4 +1,4 @@
-const express = require('express');
+[source: 4]const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const axios = require('axios');
@@ -324,29 +324,36 @@ app.get('/api/media/:type/:key', async (req, res) => {
   }
 });
 
-// Эндпоинт для безопасной потоковой передачи (стриминга) медиафайлов через прокси
+// Исправленный эндпоинт для безопасной потоковой передачи (стриминга) видео через прокси
 app.get('/api/stream/:type/:key', async (req, res) => {
   try {
-    const { type, key } = req.params;
+    const { type } = req.params;
+    const decodedKey = decodeURIComponent(req.params.key);
     const token = req.query.token;
 
-    // 1. Простейшая проверка токена (если она у вас используется)
+    // 1. Проверка токена
     if (token !== APP_TOKEN) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // 2. Получаем файл из вашей структуры данных/хранилища
-    const item = store.items && store.items.find(i => i.key === key);
-    if (!item || !item.path) {
+    // 2. Ищем пути к файлам в store.videoPaths по раскодированному ключу
+    const paths = store.videoPaths && store.videoPaths[decodedKey];
+    if (!paths) {
+      console.warn(`[Stream 404] Ключ не найден в videoPaths: "${decodedKey}"`);
       return res.status(404).json({ error: 'File not found in store' });
+    }
+
+    const diskPath = type === 'video' ? paths.videoPath : paths.thumbPath;
+    if (!diskPath || !YANDEX_OAUTH_TOKEN) {
+      return res.status(404).json({ error: 'Disk path or token missing' });
     }
 
     // 3. Запрашиваем прямую ссылку на скачивание у Яндекс Диска
     const yaRes = await axios.get(
-      `https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(item.path)}`,
+      `https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(diskPath)}`,
       {
         headers: {
-          'Authorization': `OAuth ${YANDEX_TOKEN}`
+          'Authorization': `OAuth ${YANDEX_OAUTH_TOKEN}`
         }
       }
     );
@@ -360,7 +367,7 @@ app.get('/api/stream/:type/:key', async (req, res) => {
       responseType: 'stream'
     });
 
-    // 5. Передаем заголовки (например, тип контента, если он есть)
+    // 5. Передаем заголовки типа и размера контента, если они есть
     if (response.headers['content-type']) {
       res.setHeader('Content-Type', response.headers['content-type']);
     }
@@ -368,9 +375,9 @@ app.get('/api/stream/:type/:key', async (req, res) => {
       res.setHeader('Content-Length', response.headers['content-length']);
     }
 
-    // 6. ОБРАБОТЧИК ОШИБОК ПОТОКА (то самое исправление)
+    // 6. ОБРАБОТЧИК ОШИБОК ПОТОКА (предотвращает падение процесса Node.js при обрыве связи)
     response.data.on('error', (err) => {
-      console.error('Ошибка передачи потока:', err.message);
+      console.error('Ошибка передачи потока (stream error):', err.message);
       if (!res.headersSent) {
         res.status(500).send('Ошибка передачи потока');
       } else {
@@ -382,12 +389,16 @@ app.get('/api/stream/:type/:key', async (req, res) => {
     response.data.pipe(res);
 
   } catch (error) {
-    console.error('Ошибка в эндпоинте стриминга:', error.message);
+    console.error('Ошибка в эндпоинте стриминга:', error.response?.data || error.message);
     if (!res.headersSent) {
+      if (error.response && error.response.status === 404) {
+        return res.status(404).json({ error: 'File not found on Yandex Disk' });
+      }
       res.status(500).json({ error: 'Не удалось загрузить медиафайл' });
     }
   }
 });
+
 app.post('/api/delete-video', checkAuth, async (req, res) => {
   try {
     const { key } = req.body;
