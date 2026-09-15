@@ -233,6 +233,7 @@
         <div class="lock-card">
             <h1>Вход</h1>
             <div class="lock-sub">Приватный дневник тренировок</div>
+            <input type="text" id="nameInput" class="lock-input name-input" placeholder="Ваше имя" maxlength="30" style="text-align:left; letter-spacing:normal; font-size:15px;">
             <input type="password" id="pinInput" class="lock-input" placeholder="····" maxlength="10" inputmode="numeric">
             <button class="lock-btn" onclick="checkPassword()">Войти</button>
             <div id="lockError" class="lock-error"></div>
@@ -321,9 +322,15 @@
 
         let cloudData = { dates: {}, templates: {}, comments: {}, videos: {} };
 
+        const DISPLAY_NAME_KEY = 'workaut_display_name';
+
         function checkPassword() {
             const inputVal = document.getElementById('pinInput').value;
             if (inputVal === APP_PASSWORD) {
+                const nameVal = document.getElementById('nameInput').value.trim();
+                if (nameVal) {
+                    try { localStorage.setItem(DISPLAY_NAME_KEY, nameVal); } catch (e) {}
+                }
                 document.getElementById('lockScreen').style.display = 'none';
                 document.getElementById('appContent').style.display = 'block';
                 loadCloudData();
@@ -335,6 +342,11 @@
         document.addEventListener('DOMContentLoaded', () => {
             const pinInput = document.getElementById('pinInput');
             pinInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') checkPassword(); });
+
+            try {
+                const savedName = localStorage.getItem(DISPLAY_NAME_KEY);
+                if (savedName) document.getElementById('nameInput').value = savedName;
+            } catch (e) {}
         });
 
         async function loadCloudData() {
@@ -771,7 +783,11 @@
             if (!cloudData.comments[itemKey]) cloudData.comments[itemKey] = [];
 
             const user = tg?.initDataUnsafe?.user;
-            const authorName = user && user.first_name ? user.first_name : "Я";
+            let authorName = user && user.first_name ? user.first_name : null;
+            if (!authorName) {
+                try { authorName = localStorage.getItem(DISPLAY_NAME_KEY); } catch (e) {}
+            }
+            if (!authorName) authorName = "Гость";
 
             cloudData.comments[itemKey].push({ author: authorName, text: text });
             syncWithServer();
