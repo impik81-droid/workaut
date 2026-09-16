@@ -700,20 +700,49 @@
 
         function generateThumbnail(file) {
             return new Promise((resolve) => {
+                let settled = false;
+                let captured = false;
+
+                const finish = (result) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timeoutId);
+                    try { URL.revokeObjectURL(video.src); } catch (e) {}
+                    resolve(result);
+                };
+
+                // Подстраховка: на некоторых мобильных браузерах события видео (loadeddata/seeked)
+                // для только что снятого на камеру файла могут вообще не сработать — тогда просто
+                // продолжаем без превью, а не зависаем в ожидании навсегда.
+                const timeoutId = setTimeout(() => finish(null), 6000);
+
                 const video = document.createElement('video');
                 video.preload = 'metadata';
-                video.src = URL.createObjectURL(file);
                 video.muted = true;
                 video.playsInline = true;
-                video.onloadeddata = () => { video.currentTime = 0.5; };
-                video.onseeked = () => {
-                    const canvas = document.createElement('canvas');
-                    canvas.width = 140; canvas.height = 180;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                    canvas.toBlob((blob) => { URL.revokeObjectURL(video.src); resolve(blob); }, 'image/jpeg', 0.7);
-                };
-                video.onerror = () => resolve(null);
+                video.src = URL.createObjectURL(file);
+
+                function capture() {
+                    if (captured || settled) return;
+                    captured = true;
+                    try {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = 140; canvas.height = 180;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                        canvas.toBlob((blob) => finish(blob), 'image/jpeg', 0.7);
+                    } catch (e) {
+                        finish(null);
+                    }
+                }
+
+                video.addEventListener('loadedmetadata', () => {
+                    try { video.currentTime = Math.min(0.5, (video.duration || 1) / 2); }
+                    catch (e) { capture(); }
+                });
+                video.addEventListener('seeked', capture);
+                video.addEventListener('loadeddata', capture);
+                video.addEventListener('error', () => finish(null));
             });
         }
 
@@ -733,11 +762,18 @@
             if (thumbBlob) formData.append('thumbnail', thumbBlob, 'thumb.jpg');
 
             try {
+                const controller = new AbortController();
+                // 4 минуты — с запасом на медленный мобильный интернет и большие видео,
+                // но не бесконечность: если сеть реально зависла, покажем ошибку, а не будем висеть вечно.
+                const timeoutId = setTimeout(() => controller.abort(), 4 * 60 * 1000);
+
                 const response = await fetch(`${SERVER_URL}/api/workout`, {
                     method: 'POST',
                     headers: { 'x-app-token': APP_TOKEN },
-                    body: formData
+                    body: formData,
+                    signal: controller.signal
                 });
+                clearTimeout(timeoutId);
                 const result = await response.json();
 
                 if (result.success) {
@@ -748,7 +784,11 @@
                     alert("Ошибка загрузки видео: " + (result.error || "неизвестная ошибка"));
                 }
             } catch (err) {
-                alert("Ошибка загрузки видео на сервер.");
+                if (err.name === 'AbortError') {
+                    alert("Загрузка видео заняла слишком много времени. Проверьте интернет-соединение и попробуйте ещё раз (возможно, с более коротким видео).");
+                } else {
+                    alert("Ошибка загрузки видео на сервер.");
+                }
             }
             renderWorkouts();
         }
