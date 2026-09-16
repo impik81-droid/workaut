@@ -12,12 +12,16 @@ const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'data.json');
 const DATA_PATH_ON_DISK = '/workaut/app-data.json';
 
-const APP_TOKEN = process.env.APP_TOKEN || '1234';
+const APP_TOKEN = process.env.APP_TOKEN;
+if (!APP_TOKEN) {
+  throw new Error('APP_TOKEN must be configured in the server environment');
+}
 const YANDEX_OAUTH_TOKEN = process.env.YANDEX_TOKEN;
 
-app.use(express.json({ limit: '20mb' }));
+app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ limit: '20mb', extended: true }));
-app.use(cors());
+const allowedOrigin = process.env.FRONTEND_ORIGIN;
+app.use(cors({ origin: allowedOrigin || false }));
 
 const storage = multer.memoryStorage();
 const upload = multer({
@@ -45,12 +49,23 @@ function loadLocalStore() {
   }
 }
 
-function saveLocalStore() {
-  fs.writeFile(DATA_FILE, JSON.stringify(store, null, 2), (err) => {
-    if (err) console.error('Ошибка сохранения локального кэша data.json:', err);
-  });
+function saveLocalStoreSnapshot(snapshot) {
+  const tempFile = `${DATA_FILE}.tmp`;
+  fs.writeFileSync(tempFile, snapshot, 'utf-8');
+  fs.renameSync(tempFile, DATA_FILE);
 }
 
+let persistQueue = Promise.resolve();
+function persistStoreNow() {
+  const snapshot = JSON.stringify(store, null, 2);
+  persistQueue = persistQueue.then(async () => {
+    saveLocalStoreSnapshot(snapshot);
+    await uploadStoreToYandex(snapshot);
+  });
+  return persistQueue;
+}
+
+// ---------------------------------------------------------------------------
 // Защита от одновременных запросов к Яндекс Диску (предотвращает DiskResourceLockedError)
 let isDiskBusy = false;
 async function runWithDiskLock(fn) {
@@ -69,14 +84,13 @@ async function downloadStoreFromYandex() {
   if (!YANDEX_OAUTH_TOKEN) return null;
   return await runWithDiskLock(async () => {
     try {
-      const linkRes = await axios.get(
-        'https://cloud-api.yandex.net/v1/disk/resources/download',
-        {
-          params: { path: DATA_PATH_ON_DISK },
-          headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
-        }
-      );
-      const fileRes = await axios.get(linkRes.data.href);
+      const linkRes = await axiosWithRetry({
+        method: 'get',
+        url: 'https://cloud-api.yandex.net/v1/disk/resources/download',
+        params: { path: DATA_PATH_ON_DISK },
+        headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
+      });
+      const fileRes = await axiosWithRetry({ method: 'get', url: linkRes.data.href });
       const data = fileRes.data;
       return {
         cloudData: data.cloudData || emptyStore().cloudData,
@@ -89,28 +103,34 @@ async function downloadStoreFromYandex() {
   });
 }
 
-async function uploadStoreToYandex() {
+async function uploadStoreToYandex(snapshot = JSON.stringify(store)) {
   if (!YANDEX_OAUTH_TOKEN) return;
   await runWithDiskLock(async () => {
-    try {
-      const uploadUrlRes = await axios.get(
-        'https://cloud-api.yandex.net/v1/disk/resources/upload',
-        {
-          params: { path: DATA_PATH_ON_DISK, overwrite: true },
-          headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
-        }
-      );
-      await axios.put(uploadUrlRes.data.href, JSON.stringify(store), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    } catch (e) {
-      console.error('Ошибка сохранения data.json на Яндекс.Диск:', e.response?.data || e.message);
-    }
+    const uploadUrlRes = await axiosWithRetry({
+      method: 'get',
+      url: 'https://cloud-api.yandex.net/v1/disk/resources/upload',
+      params: { path: DATA_PATH_ON_DISK, overwrite: true },
+      headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
+    });
+    await axiosWithRetry({
+      method: 'put',
+      url: uploadUrlRes.data.href,
+      data: snapshot,
+      headers: { 'Content-Type': 'application/json' },
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity
+    });
   });
 }
 
 let store = emptyStore();
 let saveTimeout = null;
+function saveStore() {
+  clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(() => {
+    persistStoreNow().catch((err) => console.error('Ошибка фонового сохранения:', err.message));
+  }, 1000);
+}
 
 async function initStore() {
   const remote = await downloadStoreFromYandex();
@@ -121,14 +141,6 @@ async function initStore() {
     store = loadLocalStore();
     console.log('Данные загружены из локального кэша (или созданы пустыми).');
   }
-}
-
-function saveStore() {
-  clearTimeout(saveTimeout);
-  saveTimeout = setTimeout(() => {
-    saveLocalStore();
-    uploadStoreToYandex();
-  }, 1000);
 }
 
 // ---------------------------------------------------------------------------
@@ -229,8 +241,9 @@ async function uploadToYandexDisk(buffer, filename) {
 }
 
 async function deleteFromYandexDisk(pathOnDisk) {
-  if (!pathOnDisk || !YANDEX_OAUTH_TOKEN) return;
-  await runWithDiskLock(async () => {
+  if (!pathOnDisk) return true;
+  if (!YANDEX_OAUTH_TOKEN) return false;
+  return await runWithDiskLock(async () => {
     try {
       await axiosWithRetry({
         method: 'delete',
@@ -238,8 +251,10 @@ async function deleteFromYandexDisk(pathOnDisk) {
         params: { path: pathOnDisk, permanently: true },
         headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
       });
+      return true;
     } catch (error) {
       console.error('Ошибка при удалении с Яндекс Диска:', error.response?.data || error.message);
+      return false;
     }
   });
 }
@@ -251,10 +266,24 @@ app.get('/api/data', checkAuth, (req, res) => {
   res.status(200).json(store.cloudData);
 });
 
-app.post('/api/data', checkAuth, (req, res) => {
-  store.cloudData = req.body;
-  saveStore();
-  res.status(200).json({ success: true });
+app.post('/api/data', checkAuth, async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return res.status(400).json({ success: false, error: 'Invalid data object' });
+    }
+    store.cloudData = {
+      dates: body.dates && typeof body.dates === 'object' ? body.dates : {},
+      templates: body.templates && typeof body.templates === 'object' ? body.templates : {},
+      comments: body.comments && typeof body.comments === 'object' ? body.comments : {},
+      videos: body.videos && typeof body.videos === 'object' ? body.videos : {}
+    };
+    await persistStoreNow();
+    res.status(200).json({ success: true, data: store.cloudData });
+  } catch (error) {
+    console.error('Ошибка сохранения данных:', error.message);
+    res.status(500).json({ success: false, error: 'Не удалось сохранить данные' });
+  }
 });
 
 app.post('/api/workout', checkAuth, upload.any(), async (req, res) => {
@@ -280,7 +309,13 @@ app.post('/api/workout', checkAuth, upload.any(), async (req, res) => {
           if (key) store.videoPaths[key].thumbPath = diskPath;
         }
       }
-      saveStore();
+      if (key) {
+        if (!store.cloudData.videos || typeof store.cloudData.videos !== 'object') {
+          store.cloudData.videos = {};
+        }
+        store.cloudData.videos[key] = { hasVideo: true };
+      }
+      await persistStoreNow();
     }
 
     const urls = (videoUrl || thumbUrl) ? { videoUrl, thumbUrl } : null;
@@ -288,6 +323,8 @@ app.post('/api/workout', checkAuth, upload.any(), async (req, res) => {
     res.status(200).json({
       success: true,
       message: 'Saved successfully to Yandex Disk',
+      key,
+      video: store.videoPaths[key] || null,
       urls
     });
   } catch (error) {
@@ -402,10 +439,15 @@ app.post('/api/delete-video', checkAuth, async (req, res) => {
 
     const paths = store.videoPaths[key];
     if (paths) {
-      await deleteFromYandexDisk(paths.videoPath);
-      await deleteFromYandexDisk(paths.thumbPath);
+      const videoDeleted = await deleteFromYandexDisk(paths.videoPath);
+      const thumbDeleted = await deleteFromYandexDisk(paths.thumbPath);
+      if (!videoDeleted || !thumbDeleted) {
+        return res.status(502).json({ success: false, error: 'Не удалось полностью удалить файл' });
+      }
       delete store.videoPaths[key];
-      saveStore();
+      if (store.cloudData.videos) delete store.cloudData.videos[key];
+      if (store.cloudData.comments) delete store.cloudData.comments[key];
+      await persistStoreNow();
     }
 
     res.status(200).json({ success: true });
