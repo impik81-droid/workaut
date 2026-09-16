@@ -626,50 +626,37 @@
             loadVisibleThumbnails(currentProgram);
         }
 
-        async function fetchMediaUrl(type, itemKey) {
-    const encodedKey = encodeURIComponent(itemKey);
-    try {
-        // Убедитесь, что здесь стоит /api/stream/, а не /api/media/
-        const resp = await fetch(`${SERVER_URL}/api/stream/${type}/${encodedKey}?token=${APP_TOKEN}`);
-        const data = await resp.json();
-        
-        if (!resp.ok || !data.success) {
-            return { success: false, error: data.error || `HTTP ${resp.status}` };
+        // /api/stream отдаёт сам файл потоком (не JSON!) — сервер проксирует его со своего домена,
+        // поэтому браузеру не нужен fetch+JSON, можно просто подставлять URL прямо в src.
+        function getStreamUrl(type, itemKey) {
+            const encodedKey = encodeURIComponent(itemKey);
+            return `${SERVER_URL}/api/stream/${type}/${encodedKey}?token=${APP_TOKEN}`;
         }
-        return { success: true, url: data.url };
-    } catch (e) {
-        return { success: false, error: e.message };
-    }
-}
 
         function loadVisibleThumbnails(currentProgram) {
-            currentProgram.exercises.forEach(async (ex, exIndex) => {
+            currentProgram.exercises.forEach((ex, exIndex) => {
                 const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
                 if (!cloudData.videos[itemKey]) return;
                 const imgEl = document.getElementById(`thumbImg_${exIndex}`);
                 if (!imgEl) return;
-                const result = await fetchMediaUrl('thumbnail', itemKey);
-                if (result.success) {
-                    imgEl.src = result.url;
-                    imgEl.style.display = 'block';
-                }
+                imgEl.onerror = () => { imgEl.style.display = 'none'; };
+                imgEl.src = getStreamUrl('thumbnail', itemKey);
+                imgEl.style.display = 'block';
             });
         }
 
-        window.openVideoModal = async function(itemKey) {
+        window.openVideoModal = function(itemKey) {
             const modal = document.getElementById('videoModal');
             const videoElem = document.getElementById('modalVideo');
             modal.style.display = 'flex';
-            videoElem.src = '';
 
-            const result = await fetchMediaUrl('video', itemKey);
-            if (!result.success) {
+            videoElem.onerror = () => {
                 alert('Не удалось загрузить видео. Проверьте соединение и попробуйте ещё раз.');
                 modal.style.display = 'none';
-                return;
-            }
-            videoElem.src = result.url;
-            videoElem.play();
+            };
+
+            videoElem.src = getStreamUrl('video', itemKey);
+            videoElem.play().catch(() => {});
         }
 
         window.closeVideoModal = function() {
