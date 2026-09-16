@@ -662,8 +662,10 @@
         window.closeVideoModal = function() {
             const modal = document.getElementById('videoModal');
             const videoElem = document.getElementById('modalVideo');
+            videoElem.onerror = null; // намеренная очистка src ниже сама по себе триггерит error — это не настоящий сбой
             videoElem.pause();
-            videoElem.src = '';
+            videoElem.removeAttribute('src');
+            videoElem.load();
             modal.style.display = 'none';
         }
 
