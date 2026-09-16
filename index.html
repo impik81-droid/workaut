@@ -755,61 +755,56 @@
             if (labelEl) labelEl.innerHTML = '⏳ Загрузка...';
 
             const thumbBlob = await generateThumbnail(file);
+
             const formData = new FormData();
             formData.append('key', itemKey);
-            formData.append('video', file, file.name || 'video.mp4');
+            formData.append('video', file);
             if (thumbBlob) formData.append('thumbnail', thumbBlob, 'thumb.jpg');
 
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10 * 60 * 1000);
             try {
+                const controller = new AbortController();
+                // 4 минуты — с запасом на медленный мобильный интернет и большие видео,
+                // но не бесконечность: если сеть реально зависла, покажем ошибку, а не будем висеть вечно.
+                const timeoutId = setTimeout(() => controller.abort(), 4 * 60 * 1000);
+
                 const response = await fetch(`${SERVER_URL}/api/workout`, {
                     method: 'POST',
                     headers: { 'x-app-token': APP_TOKEN },
                     body: formData,
                     signal: controller.signal
                 });
-                const result = await response.json().catch(() => ({}));
-                if (!response.ok || !result.success) {
-                    throw new Error(result.error || `HTTP ${response.status}`);
-                }
+                clearTimeout(timeoutId);
+                const result = await response.json();
 
-                // Сервер уже записал videoPaths и подтвердил операцию. Получаем
-                // актуальное состояние заново, чтобы не перезаписать его старым снимком.
-                await loadCloudData();
+                if (result.success) {
+                    if (!cloudData.videos) cloudData.videos = {};
+                    cloudData.videos[itemKey] = { hasVideo: true };
+                    await syncWithServer();
+                } else {
+                    alert("Ошибка загрузки видео: " + (result.error || "неизвестная ошибка"));
+                }
             } catch (err) {
                 if (err.name === 'AbortError') {
-                    alert('Загрузка видео заняла слишком много времени. Проверьте интернет и попробуйте ещё раз.');
+                    alert("Загрузка видео заняла слишком много времени. Проверьте интернет-соединение и попробуйте ещё раз (возможно, с более коротким видео).");
                 } else {
-                    alert('Не удалось сохранить видео: ' + (err.message || 'ошибка сервера'));
+                    alert("Ошибка загрузки видео на сервер.");
                 }
-                renderWorkouts();
-            } finally {
-                clearTimeout(timeoutId);
-                if (labelEl && document.body.contains(labelEl)) {
-                    labelEl.innerHTML = `📷 ${cloudData.videos[itemKey] ? 'Заменить' : 'Видео'}<input type="file" accept="video/*" onchange="handleVideo(event, ${exIndex})">`;
-                }
-                event.target.value = '';
             }
+            renderWorkouts();
         }
 
         window.deleteVideo = async function(exIndex) {
             const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
             try {
-                const response = await fetch(`${SERVER_URL}/api/delete-video`, {
+                await fetch(`${SERVER_URL}/api/delete-video`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'x-app-token': APP_TOKEN },
                     body: JSON.stringify({ key: itemKey })
                 });
-                const result = await response.json().catch(() => ({}));
-                if (!response.ok || !result.success) {
-                    throw new Error(result.error || `HTTP ${response.status}`);
-                }
-                await loadCloudData();
-            } catch (e) {
-                alert('Не удалось удалить видео: ' + (e.message || 'ошибка сервера'));
-                renderWorkouts();
-            }
+                delete cloudData.videos[itemKey];
+                await syncWithServer();
+            } catch (e) {}
+            renderWorkouts();
         }
 
         window.addComment = function(exIndex) {
