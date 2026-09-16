@@ -348,21 +348,20 @@ app.get('/api/stream/:type/:key', async (req, res) => {
       return res.status(404).json({ error: 'Disk path or token missing' });
     }
 
-    const yaRes = await axios.get(
-      `https://cloud-api.yandex.net/v1/disk/resources/download?path=${encodeURIComponent(diskPath)}`,
-      {
-        headers: {
-          'Authorization': `OAuth ${YANDEX_OAUTH_TOKEN}`
-        }
-      }
-    );
+    const yaRes = await axiosWithRetry({
+      method: 'get',
+      url: 'https://cloud-api.yandex.net/v1/disk/resources/download',
+      params: { path: diskPath },
+      headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
+    });
 
     const downloadUrl = yaRes.data.href;
 
-    const response = await axios({
+    const response = await axiosWithRetry({
       method: 'get',
       url: downloadUrl,
-      responseType: 'stream'
+      responseType: 'stream',
+      timeout: 60000
     });
 
     if (response.headers['content-type']) {
