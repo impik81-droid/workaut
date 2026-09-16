@@ -565,10 +565,10 @@
                 setsHtml += `<button class="add-set-btn" onclick="addSet(${exIndex})">+ Добавить подход</button>`;
 
                 const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
-                const videoData = cloudData.videos[itemKey];
+                const videoList = getVideoList(itemKey);
 
                 let videoBlock = '';
-                if (videoData) {
+                if (videoList.length > 0) {
                     const commentsList = cloudData.comments[itemKey] || [];
                     let commentsHtml = '';
                     commentsList.forEach((c) => {
@@ -580,18 +580,20 @@
                         `;
                     });
 
+                    let thumbsHtml = '';
+                    videoList.forEach((v, vIdx) => {
+                        thumbsHtml += `
+                            <div class="thumbnail-wrapper" id="thumbWrap_${exIndex}_${vIdx}" onclick="openVideoModal('${itemKey}', '${v.id}')">
+                                <img id="thumbImg_${exIndex}_${vIdx}" class="thumbnail-img" alt="Видео" style="display:none;" onerror="this.style.display='none';">
+                                <div class="play-overlay">▶</div>
+                                <button class="thumb-delete-btn" onclick="event.stopPropagation(); deleteVideo(${exIndex}, '${v.id}')" title="Удалить это видео">✕</button>
+                            </div>
+                        `;
+                    });
+
                     videoBlock = `
                         <div class="video-preview-container">
-                            <div class="thumbnail-wrapper" id="thumbWrap_${exIndex}" onclick="openVideoModal('${itemKey}')">
-                                <img id="thumbImg_${exIndex}" class="thumbnail-img" alt="Видео" style="display:none;" onerror="this.style.display='none';">
-                                <div class="play-overlay">▶</div>
-                            </div>
-                            <div class="video-info-block">
-                                <div class="video-actions-row">
-                                    <button class="action-btn" onclick="openVideoModal('${itemKey}')">👁 См. видео</button>
-                                    <button class="action-btn delete" onclick="deleteVideo(${exIndex})">🗑 Удалить</button>
-                                </div>
-                            </div>
+                            ${thumbsHtml}
                         </div>
                         <div class="comments-section">
                             <div class="comments-title">Комментарии к технике</div>
@@ -606,7 +608,7 @@
 
                 let videoBtnHtml = `
                     <label class="video-btn-label" id="label_${exIndex}">
-                        📷 ${videoData ? 'Заменить' : 'Видео'}
+                        📷 ${videoList.length > 0 ? '+ Ещё видео' : 'Видео'}
                         <input type="file" accept="video/*" onchange="handleVideo(event, ${exIndex})">
                     </label>
                 `;
