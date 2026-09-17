@@ -187,34 +187,45 @@ async function uploadToYandexDisk(buffer, filename) {
   const pathOnDisk = `/workaut/${Date.now()}-${filename}`;
 
   return await runWithDiskLock(async () => {
-    let uploadUrl;
-    try {
-      const uploadUrlRes = await axiosWithRetry({
-        method: 'get',
-        url: 'https://cloud-api.yandex.net/v1/disk/resources/upload',
-        params: { path: pathOnDisk, overwrite: true },
-        headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
-      });
-      uploadUrl = uploadUrlRes.data.href;
-    } catch (error) {
-      console.error(`[uploadToYandexDisk] Ошибка получения upload-url (${error.response?.status}):`, error.response?.data || error.message);
-      throw error;
-    }
+    // Получаем ссылку на загрузку и сразу заливаем файл — если что-то пошло не так
+    // (например, ссылка протухла, пока грузился большой файл), пробуем ЗАНОВО с нуля,
+    // с новой ссылкой, а не повторяем PUT со старой (уже нерабочей) ссылкой.
+    let lastError;
+    const maxAttempts = 2;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      let uploadUrl;
+      try {
+        const uploadUrlRes = await axiosWithRetry({
+          method: 'get',
+          url: 'https://cloud-api.yandex.net/v1/disk/resources/upload',
+          params: { path: pathOnDisk, overwrite: true },
+          headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
+        });
+        uploadUrl = uploadUrlRes.data.href;
+      } catch (error) {
+        console.error(`[uploadToYandexDisk] Попытка ${attempt}: ошибка получения upload-url (${error.response?.status}):`, error.response?.data || error.message);
+        lastError = error;
+        continue;
+      }
 
-    try {
-      await axiosWithRetry({
-        method: 'put',
-        url: uploadUrl,
-        data: buffer,
-        headers: { 'Content-Type': 'application/octet-stream' },
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity,
-        timeout: 120000
-      });
-    } catch (error) {
-      console.error(`[uploadToYandexDisk] Ошибка загрузки файла (${error.response?.status}):`, error.response?.data || error.message);
-      throw error;
+      try {
+        await axiosWithRetry({
+          method: 'put',
+          url: uploadUrl,
+          data: buffer,
+          headers: { 'Content-Type': 'application/octet-stream' },
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity,
+          timeout: 180000
+        }, 0); // саму отправку файла не ретраим с тем же href — при неудаче берём ссылку заново (см. цикл выше)
+        lastError = null;
+        break; // успех
+      } catch (error) {
+        console.error(`[uploadToYandexDisk] Попытка ${attempt}: ошибка загрузки файла (${error.response?.status}):`, error.response?.data || error.message);
+        lastError = error;
+      }
     }
+    if (lastError) throw lastError;
 
     try {
       await axiosWithRetry({
@@ -274,7 +285,18 @@ app.post('/api/data', checkAuth, (req, res) => {
   res.status(200).json({ success: true });
 });
 
-app.post('/api/workout', checkAuth, upload.any(), async (req, res) => {
+app.post('/api/workout', checkAuth, (req, res, next) => {
+  upload.any()(req, res, (err) => {
+    if (err) {
+      console.error('[Multer] Ошибка приёма файла:', err.message);
+      const message = err.code === 'LIMIT_FILE_SIZE'
+        ? 'Файл слишком большой (лимит 100 МБ). Попробуйте снять видео покороче или в меньшем качестве.'
+        : `Ошибка загрузки файла: ${err.message}`;
+      return res.status(400).json({ success: false, error: message });
+    }
+    next();
+  });
+}, async (req, res) => {
   try {
     const key = req.body.key;
     let videoDiskPath = null;
