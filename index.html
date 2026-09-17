@@ -577,10 +577,16 @@
                 if (videoList.length > 0) {
                     const commentsList = cloudData.comments[itemKey] || [];
                     let commentsHtml = '';
-                    commentsList.forEach((c) => {
+                    commentsList.forEach((c, cIdx) => {
                         commentsHtml += `
                             <div class="comment-item">
-                                <div class="comment-author">${c.author}</div>
+                                <div class="comment-header-row">
+                                    <div class="comment-author">${c.author}</div>
+                                    <div class="comment-actions">
+                                        <button class="comment-action-btn" onclick="editComment(${exIndex}, ${cIdx})" title="Изменить">✏️</button>
+                                        <button class="comment-action-btn" onclick="deleteComment(${exIndex}, ${cIdx})" title="Удалить">🗑</button>
+                                    </div>
+                                </div>
                                 <div>${c.text}</div>
                             </div>
                         `;
