@@ -126,7 +126,8 @@
         .add-set-btn:hover { border-color: var(--accent); color: var(--accent); }
 
         .video-preview-container {
-            margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; display: flex; align-items: center; gap: 12px;
+            margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px;
+            display: flex; align-items: flex-start; gap: 10px; overflow-x: auto;
         }
         .thumbnail-wrapper {
             position: relative; width: 68px; height: 88px; border-radius: 10px; overflow: hidden;
@@ -136,6 +137,11 @@
         .play-overlay {
             position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
             color: #fff; font-size: 18px; background: rgba(0,0,0,0.25);
+        }
+        .thumb-delete-btn {
+            position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; border-radius: 50%;
+            border: none; background: rgba(15,17,21,0.85); color: var(--danger); font-size: 11px;
+            display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0;
         }
         .video-info-block { flex: 1; display: flex; flex-direction: column; gap: 6px; }
         .video-actions-row { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -565,10 +571,10 @@
                 setsHtml += `<button class="add-set-btn" onclick="addSet(${exIndex})">+ Добавить подход</button>`;
 
                 const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
-                const videoData = cloudData.videos[itemKey];
+                const videoList = getVideoList(itemKey);
 
                 let videoBlock = '';
-                if (videoData) {
+                if (videoList.length > 0) {
                     const commentsList = cloudData.comments[itemKey] || [];
                     let commentsHtml = '';
                     commentsList.forEach((c) => {
@@ -580,18 +586,20 @@
                         `;
                     });
 
+                    let thumbsHtml = '';
+                    videoList.forEach((v, vIdx) => {
+                        thumbsHtml += `
+                            <div class="thumbnail-wrapper" id="thumbWrap_${exIndex}_${vIdx}" onclick="openVideoModal('${itemKey}', '${v.id}')">
+                                <img id="thumbImg_${exIndex}_${vIdx}" class="thumbnail-img" alt="Видео" style="display:none;" onerror="this.style.display='none';">
+                                <div class="play-overlay">▶</div>
+                                <button class="thumb-delete-btn" onclick="event.stopPropagation(); deleteVideo(${exIndex}, '${v.id}')" title="Удалить это видео">✕</button>
+                            </div>
+                        `;
+                    });
+
                     videoBlock = `
                         <div class="video-preview-container">
-                            <div class="thumbnail-wrapper" id="thumbWrap_${exIndex}" onclick="openVideoModal('${itemKey}')">
-                                <img id="thumbImg_${exIndex}" class="thumbnail-img" alt="Видео" style="display:none;" onerror="this.style.display='none';">
-                                <div class="play-overlay">▶</div>
-                            </div>
-                            <div class="video-info-block">
-                                <div class="video-actions-row">
-                                    <button class="action-btn" onclick="openVideoModal('${itemKey}')">👁 См. видео</button>
-                                    <button class="action-btn delete" onclick="deleteVideo(${exIndex})">🗑 Удалить</button>
-                                </div>
-                            </div>
+                            ${thumbsHtml}
                         </div>
                         <div class="comments-section">
                             <div class="comments-title">Комментарии к технике</div>
@@ -606,7 +614,7 @@
 
                 let videoBtnHtml = `
                     <label class="video-btn-label" id="label_${exIndex}">
-                        📷 ${videoData ? 'Заменить' : 'Видео'}
+                        📷 ${videoList.length > 0 ? '+ Ещё видео' : 'Видео'}
                         <input type="file" accept="video/*" onchange="handleVideo(event, ${exIndex})">
                     </label>
                 `;
@@ -626,26 +634,38 @@
             loadVisibleThumbnails(currentProgram);
         }
 
+        // Раньше cloudData.videos[itemKey] был одной записью {hasVideo:true} — теперь это массив
+        // видео [{id}, {id}, ...]. Эта функция приводит старый формат к новому на лету.
+        function getVideoList(itemKey) {
+            const v = cloudData.videos[itemKey];
+            if (!v) return [];
+            if (Array.isArray(v)) return v;
+            return [{ id: 'legacy' }]; // старая запись без id — сервер тоже понимает 'legacy'/пустой id
+        }
+
         // /api/stream отдаёт сам файл потоком (не JSON!) — сервер проксирует его со своего домена,
         // поэтому браузеру не нужен fetch+JSON, можно просто подставлять URL прямо в src.
-        function getStreamUrl(type, itemKey) {
+        function getStreamUrl(type, itemKey, videoId) {
             const encodedKey = encodeURIComponent(itemKey);
-            return `${SERVER_URL}/api/stream/${type}/${encodedKey}?token=${APP_TOKEN}`;
+            const idPart = videoId ? `/${encodeURIComponent(videoId)}` : '';
+            return `${SERVER_URL}/api/stream/${type}/${encodedKey}${idPart}?token=${APP_TOKEN}`;
         }
 
         function loadVisibleThumbnails(currentProgram) {
             currentProgram.exercises.forEach((ex, exIndex) => {
                 const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
-                if (!cloudData.videos[itemKey]) return;
-                const imgEl = document.getElementById(`thumbImg_${exIndex}`);
-                if (!imgEl) return;
-                imgEl.onerror = () => { imgEl.style.display = 'none'; };
-                imgEl.src = getStreamUrl('thumbnail', itemKey);
-                imgEl.style.display = 'block';
+                const videoList = getVideoList(itemKey);
+                videoList.forEach((v, vIdx) => {
+                    const imgEl = document.getElementById(`thumbImg_${exIndex}_${vIdx}`);
+                    if (!imgEl) return;
+                    imgEl.onerror = () => { imgEl.style.display = 'none'; };
+                    imgEl.src = getStreamUrl('thumbnail', itemKey, v.id);
+                    imgEl.style.display = 'block';
+                });
             });
         }
 
-        window.openVideoModal = function(itemKey) {
+        window.openVideoModal = function(itemKey, videoId) {
             const modal = document.getElementById('videoModal');
             const videoElem = document.getElementById('modalVideo');
             modal.style.display = 'flex';
@@ -655,7 +675,7 @@
                 modal.style.display = 'none';
             };
 
-            videoElem.src = getStreamUrl('video', itemKey);
+            videoElem.src = getStreamUrl('video', itemKey, videoId);
             videoElem.play().catch(() => {});
         }
 
@@ -778,7 +798,9 @@
 
                 if (result.success) {
                     if (!cloudData.videos) cloudData.videos = {};
-                    cloudData.videos[itemKey] = { hasVideo: true };
+                    const existing = getVideoList(itemKey);
+                    existing.push({ id: result.id });
+                    cloudData.videos[itemKey] = existing;
                     await syncWithServer();
                 } else {
                     alert("Ошибка загрузки видео: " + (result.error || "неизвестная ошибка"));
@@ -793,15 +815,20 @@
             renderWorkouts();
         }
 
-        window.deleteVideo = async function(exIndex) {
+        window.deleteVideo = async function(exIndex, videoId) {
             const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
             try {
                 await fetch(`${SERVER_URL}/api/delete-video`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'x-app-token': APP_TOKEN },
-                    body: JSON.stringify({ key: itemKey })
+                    body: JSON.stringify({ key: itemKey, id: videoId })
                 });
-                delete cloudData.videos[itemKey];
+                const remaining = getVideoList(itemKey).filter((v) => v.id !== videoId);
+                if (remaining.length > 0) {
+                    cloudData.videos[itemKey] = remaining;
+                } else {
+                    delete cloudData.videos[itemKey];
+                }
                 await syncWithServer();
             } catch (e) {}
             renderWorkouts();
