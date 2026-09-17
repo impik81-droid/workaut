@@ -32,6 +32,23 @@ function emptyStore() {
   return { cloudData: { dates: {}, templates: {}, comments: {}, videos: {} }, videoPaths: {} };
 }
 
+// Раньше store.videoPaths[key] был одним объектом {videoPath, thumbPath} — теперь это массив
+// (несколько видео на упражнение). Эта функция приводит старые записи к новому формату на лету,
+// так что уже загруженные видео не потеряются.
+function getVideoEntries(key) {
+  const existing = store.videoPaths[key];
+  if (!existing) return [];
+  if (Array.isArray(existing)) return existing;
+  // старый формат — один объект без id
+  const migrated = [{ id: 'legacy', videoPath: existing.videoPath, thumbPath: existing.thumbPath }];
+  store.videoPaths[key] = migrated;
+  return migrated;
+}
+
+function generateVideoId() {
+  return `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function loadLocalStore() {
   try {
     const raw = fs.readFileSync(DATA_FILE, 'utf-8');
@@ -260,90 +277,65 @@ app.post('/api/data', checkAuth, (req, res) => {
 app.post('/api/workout', checkAuth, upload.any(), async (req, res) => {
   try {
     const key = req.body.key;
-    let videoUrl = null;
-    let thumbUrl = null;
+    let videoDiskPath = null;
+    let thumbDiskPath = null;
 
-    if (req.files && req.files.length > 0) {
-      if (key) {
-        if (!store.videoPaths[key]) store.videoPaths[key] = {};
-      }
-
+    if (req.files && req.files.length > 0 && key) {
       for (const file of req.files) {
         console.log(`Загрузка ${file.fieldname} на Яндекс Диск...`);
-        const { publicUrl, diskPath } = await uploadToYandexDisk(file.buffer, file.originalname);
+        const { diskPath } = await uploadToYandexDisk(file.buffer, file.originalname);
 
         if (file.fieldname === 'video') {
-          videoUrl = publicUrl;
-          if (key) store.videoPaths[key].videoPath = diskPath;
+          videoDiskPath = diskPath;
         } else if (file.fieldname === 'thumbnail') {
-          thumbUrl = publicUrl;
-          if (key) store.videoPaths[key].thumbPath = diskPath;
+          thumbDiskPath = diskPath;
         }
       }
+
+      const entries = getVideoEntries(key);
+      const newId = generateVideoId();
+      entries.push({ id: newId, videoPath: videoDiskPath, thumbPath: thumbDiskPath });
+      store.videoPaths[key] = entries;
+
       saveStore();
+
+      return res.status(200).json({
+        success: true,
+        message: 'Saved successfully to Yandex Disk',
+        id: newId
+      });
     }
 
-    const urls = (videoUrl || thumbUrl) ? { videoUrl, thumbUrl } : null;
-
-    res.status(200).json({
-      success: true,
-      message: 'Saved successfully to Yandex Disk',
-      urls
-    });
+    res.status(200).json({ success: true, message: 'Nothing to upload', id: null });
   } catch (error) {
     console.error('Ошибка при сохранении:', error.response?.data || error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// Исправленный эндпоинт с прямым редиректом на Яндекс.Диск
-app.get('/api/media/:type/:key', async (req, res) => {
-  if (req.query.token !== APP_TOKEN) {
-    return res.status(401).json({ success: false, error: 'Unauthorized' });
-  }
-
-  const { type, key } = req.params;
-  const decodedKey = decodeURIComponent(key);
-  const paths = store.videoPaths[decodedKey];
-  if (!paths) return res.status(404).json({ success: false, error: 'Not found' });
-
-  const diskPath = type === 'video' ? paths.videoPath : paths.thumbPath;
-  if (!diskPath || !YANDEX_OAUTH_TOKEN) return res.status(404).json({ success: false, error: 'Not found' });
-
-  try {
-    const linkRes = await axiosWithRetry({
-      method: 'get',
-      url: 'https://cloud-api.yandex.net/v1/disk/resources/download',
-      params: { path: diskPath },
-      headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
-    });
-    
-    // Перенаправляем браузер сразу на реальный медиафайл в облаке
-    return res.redirect(302, linkRes.data.href);
-  } catch (error) {
-    console.error('Ошибка получения прямой ссылки на медиа:', error.response?.data || error.message);
-    res.status(504).json({ success: false, error: 'Не удалось получить ссылку с Яндекс.Диска' });
-  }
-});
-
 // Эндпоинт для безопасной потоковой передачи (стриминга) видео через прокси
-app.get('/api/stream/:type/:key', async (req, res) => {
+app.get('/api/stream/:type/:key/:id?', async (req, res) => {
   try {
     const { type } = req.params;
     const decodedKey = decodeURIComponent(req.params.key);
+    const videoId = req.params.id;
     const token = req.query.token;
 
     if (token !== APP_TOKEN) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const paths = store.videoPaths && store.videoPaths[decodedKey];
-    if (!paths) {
+    const entries = getVideoEntries(decodedKey);
+    if (entries.length === 0) {
       console.warn(`[Stream 404] Ключ не найден в videoPaths: "${decodedKey}"`);
       return res.status(404).json({ error: 'File not found in store' });
     }
 
-    const diskPath = type === 'video' ? paths.videoPath : paths.thumbPath;
+    // Если id не передан (старые ссылки) — берём первое видео для совместимости
+    const entry = videoId ? entries.find((e) => e.id === videoId) : entries[0];
+    if (!entry) return res.status(404).json({ error: 'Video id not found' });
+
+    const diskPath = type === 'video' ? entry.videoPath : entry.thumbPath;
     if (!diskPath || !YANDEX_OAUTH_TOKEN) {
       return res.status(404).json({ error: 'Disk path or token missing' });
     }
@@ -395,16 +387,27 @@ app.get('/api/stream/:type/:key', async (req, res) => {
 
 app.post('/api/delete-video', checkAuth, async (req, res) => {
   try {
-    const { key } = req.body;
+    const { key, id } = req.body;
     if (!key) {
       return res.status(400).json({ success: false, error: 'key is required' });
     }
 
-    const paths = store.videoPaths[key];
-    if (paths) {
-      await deleteFromYandexDisk(paths.videoPath);
-      await deleteFromYandexDisk(paths.thumbPath);
-      delete store.videoPaths[key];
+    const entries = getVideoEntries(key);
+    if (entries.length > 0) {
+      // id не передан — для совместимости со старыми вызовами удаляем всё, что есть на этом ключе
+      const toDelete = id ? entries.filter((e) => e.id === id) : entries;
+      const remaining = id ? entries.filter((e) => e.id !== id) : [];
+
+      for (const entry of toDelete) {
+        await deleteFromYandexDisk(entry.videoPath);
+        await deleteFromYandexDisk(entry.thumbPath);
+      }
+
+      if (remaining.length > 0) {
+        store.videoPaths[key] = remaining;
+      } else {
+        delete store.videoPaths[key];
+      }
       saveStore();
     }
 
