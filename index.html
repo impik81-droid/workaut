@@ -770,6 +770,14 @@
             const file = event.target.files[0];
             if (!file) return;
 
+            const MAX_SIZE = 95 * 1024 * 1024; // с запасом под лимит сервера в 100 МБ
+            if (file.size > MAX_SIZE) {
+                const sizeMb = (file.size / 1024 / 1024).toFixed(0);
+                alert(`Видео слишком большое (${sizeMb} МБ, максимум ~95 МБ). Снимите ролик покороче или уменьшите качество съёмки в настройках камеры.`);
+                event.target.value = '';
+                return;
+            }
+
             const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
             const labelEl = document.getElementById(`label_${exIndex}`);
             if (labelEl) labelEl.innerHTML = '⏳ Загрузка...';
