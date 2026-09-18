@@ -105,7 +105,9 @@
         .exercise-meta { font-size: 12px; color: var(--text-dim); margin-bottom: 12px; }
         .sets-grid { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
         .set-row { display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.03); padding: 7px 8px; border-radius: 8px; }
-        .set-label { font-size: 12px; color: var(--text-dim); width: 52px; flex-shrink: 0; }
+        .set-label { font-size: 12px; color: var(--text-dim); width: 60px; flex-shrink: 0; }
+        .warmup-row .set-label { color: var(--teal); font-weight: 600; }
+        .warmup-row { background: rgba(45,212,191,0.06); }
         .set-input {
             flex: 1; padding: 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg);
             color: var(--text); font-size: 13px; text-align: center; min-width: 0; font-family: inherit;
@@ -164,7 +166,14 @@
         .comments-section { background: rgba(255,255,255,0.03); border-radius: 10px; padding: 10px; margin-top: 8px; }
         .comments-title { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
         .comment-item { font-size: 13px; background: var(--surface-2); border: 1px solid var(--line); padding: 7px 9px; border-radius: 8px; margin-bottom: 6px; }
-        .comment-author { font-size: 10px; color: var(--teal); font-weight: 700; margin-bottom: 2px; }
+        .comment-header-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 2px; }
+        .comment-author { font-size: 10px; color: var(--teal); font-weight: 700; }
+        .comment-actions { display: flex; gap: 4px; flex-shrink: 0; }
+        .comment-action-btn {
+            background: none; border: none; padding: 2px 4px; font-size: 11px; cursor: pointer;
+            opacity: 0.6; line-height: 1;
+        }
+        .comment-action-btn:hover { opacity: 1; }
         .comment-input-row { display: flex; gap: 6px; margin-top: 6px; }
         .comment-input {
             flex: 1; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg);
@@ -178,7 +187,12 @@
             border-radius: 12px; padding: 14px; margin-bottom: 10px; cursor: pointer;
         }
         .history-date { font-size: 14px; font-weight: 700; }
-        .history-program { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
+        .history-program { font-size: 12px; color: var(--text-dim); }
+        .history-header-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+        .history-delete-btn {
+            background: rgba(255,84,112,0.12); color: var(--danger); border: none; width: 28px; height: 28px;
+            border-radius: 8px; font-size: 13px; cursor: pointer; flex-shrink: 0;
+        }
         .history-ex-row { font-size: 13px; padding: 4px 0; border-top: 1px solid var(--line); display: flex; justify-content: space-between; gap: 8px; }
         .history-ex-row:first-of-type { border-top: none; }
         .history-ex-name { color: var(--text); }
@@ -385,32 +399,32 @@
 
         const programData = [
             { id: "day1", name: "День 1 (Квадры)", color: "#FFB238", exercises: [
-                { name: "Сгибание ног сидя или лежа", sets: 3, target: "15 повторений" },
-                { name: "Гак-присед", sets: 3, target: "12 повторений" },
-                { name: "Жим ногами широко низко", sets: 3, target: "12 повторений" },
-                { name: "Присед в Смите коленодомин.", sets: 3, target: "10-12 повторений" },
-                { name: "Разгибание ног", sets: 3, target: "12 повторений" }
+                { name: "Сгибание ног сидя или лежа", sets: 4, target: "15 повторений" },
+                { name: "Гак-присед", sets: 4, target: "12 повторений" },
+                { name: "Жим ногами широко низко", sets: 4, target: "12 повторений" },
+                { name: "Присед в Смите коленодомин.", sets: 4, target: "10-12 повторений" },
+                { name: "Разгибание ног", sets: 4, target: "12 повторений" }
             ]},
             { id: "day2", name: "День 2 (Спина)", color: "#2DD4BF", exercises: [
-                { name: "Подтягивание в гравитроне ш.хв.", sets: 3, target: "12 повторений" },
-                { name: "Тяга штанги в наклоне прямым хв.", sets: 3, target: "10-12 повторений" },
-                { name: "Тяга горизонтального Хаммера к груди", sets: 3, target: "12 повторений" },
-                { name: "Тяга Вертикальная Шир.хв. (прожатие)", sets: 3, target: "15 повторений" },
-                { name: "Тяга каната ко лбу", sets: 3, target: "15 повторений" }
+                { name: "Подтягивание в гравитроне ш.хв.", sets: 4, target: "12 повторений" },
+                { name: "Тяга штанги в наклоне прямым хв.", sets: 4, target: "10-12 повторений" },
+                { name: "Тяга горизонтального Хаммера к груди", sets: 4, target: "12 повторений" },
+                { name: "Тяга Вертикальная Шир.хв. (прожатие)", sets: 4, target: "15 повторений" },
+                { name: "Тяга каната ко лбу", sets: 4, target: "15 повторений" }
             ]},
             { id: "day3", name: "День 3 (Ягодицы / Низ)", color: "#FF6FA8", exercises: [
-                { name: "Сгибание ног Сидя/лежа", sets: 3, target: "12 повторений" },
-                { name: "Жим ногами высоко узко", sets: 3, target: "12 повторений" },
-                { name: "Ягодичный мост", sets: 3, target: "12 повторений" },
-                { name: "Румынская тяга", sets: 3, target: "12 повторений" },
-                { name: "Жим одной ногой высоко", sets: 3, target: "15 повторений" }
+                { name: "Сгибание ног Сидя/лежа", sets: 4, target: "12 повторений" },
+                { name: "Жим ногами высоко узко", sets: 4, target: "12 повторений" },
+                { name: "Ягодичный мост", sets: 4, target: "12 повторений" },
+                { name: "Румынская тяга", sets: 4, target: "12 повторений" },
+                { name: "Жим одной ногой высоко", sets: 4, target: "15 повторений" }
             ]},
             { id: "day4", name: "День 4 (Плечи / Грудь / Руки)", color: "#8B7CFF", exercises: [
-                { name: "Отведение гантелей в стороны", sets: 3, target: "12 повторений" },
-                { name: "Протяжка с грифом", sets: 3, target: "12 повторений" },
-                { name: "Жим штанги сидя", sets: 3, target: "12 повторений" },
-                { name: "Отжимание на полу (руки узко)", sets: 3, target: "12-15 повторений" },
-                { name: "Разгибание рук с прям. рукояткой", sets: 3, target: "12-15 повторений" }
+                { name: "Отведение гантелей в стороны", sets: 4, target: "12 повторений" },
+                { name: "Протяжка с грифом", sets: 4, target: "12 повторений" },
+                { name: "Жим штанги сидя", sets: 4, target: "12 повторений" },
+                { name: "Отжимание на полу (руки узко)", sets: 4, target: "12-15 повторений" },
+                { name: "Разгибание рук с прям. рукояткой", sets: 4, target: "12-15 повторений" }
             ]}
         ];
 
@@ -558,9 +572,11 @@
                         ? `<button class="set-remove-btn" onclick="removeSet(${exIndex}, ${s})" title="Убрать подход">✕</button>`
                         : `<span class="set-remove-spacer"></span>`;
 
+                    const setLabel = s === 0 ? 'Разминка' : `Подход ${s}`;
+
                     setsHtml += `
-                        <div class="set-row ${setData.checked ? 'completed' : ''}" id="row_${exIndex}_${s}">
-                            <span class="set-label">Подход ${s + 1}</span>
+                        <div class="set-row ${setData.checked ? 'completed' : ''} ${s === 0 ? 'warmup-row' : ''}" id="row_${exIndex}_${s}">
+                            <span class="set-label">${setLabel}</span>
                             <input type="number" class="set-input" placeholder="Вес" value="${setData.weight || ''}" oninput="updateData(${exIndex}, ${s}, 'weight', this.value)">
                             <input type="number" class="set-input" placeholder="Повт" value="${setData.reps || ''}" oninput="updateData(${exIndex}, ${s}, 'reps', this.value)">
                             <input type="checkbox" class="set-checkbox" ${setData.checked ? 'checked' : ''} onchange="toggleCheck(${exIndex}, ${s}, this.checked)">
@@ -869,6 +885,33 @@
             renderWorkouts();
         }
 
+        window.editComment = function(exIndex, commentIndex) {
+            const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
+            const list = cloudData.comments[itemKey];
+            if (!list || !list[commentIndex]) return;
+
+            const current = list[commentIndex].text;
+            const updated = prompt('Изменить комментарий:', current);
+            if (updated === null) return; // отмена
+            const trimmed = updated.trim();
+            if (!trimmed) return;
+
+            list[commentIndex].text = trimmed;
+            syncWithServer();
+            renderWorkouts();
+        }
+
+        window.deleteComment = function(exIndex, commentIndex) {
+            const itemKey = `${selectedDate}_${activeProgramId}_${exIndex}`;
+            const list = cloudData.comments[itemKey];
+            if (!list || !list[commentIndex]) return;
+            if (!confirm('Удалить комментарий?')) return;
+
+            list.splice(commentIndex, 1);
+            syncWithServer();
+            renderWorkouts();
+        }
+
         // ============================= ИСТОРИЯ =============================
         function dateHasData(dateEntry) {
             if (!dateEntry) return false;
@@ -932,13 +975,35 @@
                     });
 
                     card.innerHTML = `
-                        <div class="history-date">${formatDateHuman(dateStr)}</div>
-                        <div class="history-program">${prog.name}</div>
+                        <div class="history-header-row">
+                            <div>
+                                <div class="history-date">${formatDateHuman(dateStr)}</div>
+                                <div class="history-program">${prog.name}</div>
+                            </div>
+                            <button class="history-delete-btn" title="Удалить эту тренировку">🗑</button>
+                        </div>
                         ${rowsHtml}
                     `;
+                    card.querySelector('.history-delete-btn').onclick = (e) => {
+                        e.stopPropagation();
+                        deleteHistoryEntry(dateStr, prog.id);
+                    };
                     container.appendChild(card);
                 });
             });
+        }
+
+        function deleteHistoryEntry(dateStr, progId) {
+            if (!confirm('Удалить эту тренировку из истории? Веса и повторения за этот день будут стёрты.')) return;
+            if (cloudData.dates[dateStr]) {
+                delete cloudData.dates[dateStr][progId];
+                const remainingKeys = Object.keys(cloudData.dates[dateStr]).filter(k => k !== 'programId');
+                if (remainingKeys.length === 0) {
+                    delete cloudData.dates[dateStr];
+                }
+            }
+            syncWithServer();
+            renderHistory();
         }
 
         // ============================= КАЛЕНДАРЬ =============================
