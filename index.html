@@ -756,10 +756,10 @@
                 // Подстраховка: на некоторых мобильных браузерах события видео (loadeddata/seeked)
                 // для только что снятого на камеру файла могут вообще не сработать — тогда просто
                 // продолжаем без превью, а не зависаем в ожидании навсегда.
-                const timeoutId = setTimeout(() => finish(null), 6000);
+                const timeoutId = setTimeout(() => finish(null), 8000);
 
                 const video = document.createElement('video');
-                video.preload = 'metadata';
+                video.preload = 'auto';
                 video.muted = true;
                 video.playsInline = true;
                 video.src = URL.createObjectURL(file);
@@ -778,24 +778,39 @@
                     }
                 }
 
+                // На iOS Safari currentTime сам по себе часто не декодирует реальный кадр —
+                // кадр остаётся чёрным, пока видео хоть на мгновение не начнёт реально играть.
+                // Поэтому после перемотки коротко "проигрываем" и сразу ставим на паузу.
+                function forceDecodeAndCapture() {
+                    if (captured || settled) return;
+                    const playPromise = video.play();
+                    if (playPromise && typeof playPromise.then === 'function') {
+                        playPromise.then(() => {
+                            setTimeout(() => { video.pause(); capture(); }, 80);
+                        }).catch(() => capture());
+                    } else {
+                        setTimeout(() => { try { video.pause(); } catch (e) {} capture(); }, 80);
+                    }
+                }
+
                 function attemptSeek() {
                     if (captured || settled) return;
                     try {
                         const target = Math.min(0.5, (video.duration || 1) / 2);
                         if (Math.abs(video.currentTime - target) < 0.01) {
                             // уже на нужном месте — перемотка не даст нового события seeked
-                            capture();
+                            forceDecodeAndCapture();
                         } else {
                             video.currentTime = target;
                         }
                     } catch (e) {
-                        capture(); // перемотать не получилось — берём что есть, чем ничего
+                        forceDecodeAndCapture(); // перемотать не получилось — берём что есть, чем ничего
                     }
                 }
 
                 video.addEventListener('loadedmetadata', attemptSeek);
                 video.addEventListener('loadeddata', attemptSeek); // подстраховка, если loadedmetadata не сработал
-                video.addEventListener('seeked', capture);
+                video.addEventListener('seeked', forceDecodeAndCapture);
                 video.addEventListener('error', () => finish(null));
             });
         }
