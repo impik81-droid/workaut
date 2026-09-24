@@ -813,9 +813,8 @@
 
             try {
                 const controller = new AbortController();
-                // 4 минуты — с запасом на медленный мобильный интернет и большие видео,
-                // но не бесконечность: если сеть реально зависла, покажем ошибку, а не будем висеть вечно.
-                const timeoutId = setTimeout(() => controller.abort(), 4 * 60 * 1000);
+                // 8 минут — с запасом на сжатие видео на сервере плюс саму загрузку
+                const timeoutId = setTimeout(() => controller.abort(), 8 * 60 * 1000);
 
                 const response = await fetch(`${SERVER_URL}/api/workout`, {
                     method: 'POST',
