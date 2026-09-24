@@ -4,6 +4,10 @@ const multer = require('multer');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+const ffmpegPath = require('ffmpeg-static');
+const ffmpeg = require('fluent-ffmpeg');
+ffmpeg.setFfmpegPath(ffmpegPath);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -179,6 +183,52 @@ async function axiosWithRetry(config, retries = 2) {
 // ---------------------------------------------------------------------------
 // Яндекс.Диск (Работа с медиафайлами)
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Сжатие видео перед загрузкой (чтобы не тащить на Диск исходники в 100+ МБ с телефона)
+// ---------------------------------------------------------------------------
+const COMPRESS_SKIP_THRESHOLD = 15 * 1024 * 1024; // маленькие файлы не трогаем — не стоит тратить время
+
+async function compressVideoBuffer(buffer, originalName) {
+  if (buffer.length < COMPRESS_SKIP_THRESHOLD) return buffer;
+
+  const tmpDir = os.tmpdir();
+  const uniq = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const ext = path.extname(originalName) || '.mp4';
+  const inputPath = path.join(tmpDir, `in_${uniq}${ext}`);
+  const outputPath = path.join(tmpDir, `out_${uniq}.mp4`);
+
+  try {
+    fs.writeFileSync(inputPath, buffer);
+
+    await new Promise((resolve, reject) => {
+      ffmpeg(inputPath)
+        .videoCodec('libx264')
+        .outputOptions([
+          '-crf 28',
+          '-preset veryfast',
+          "-vf scale='min(1280,iw)':-2", // не увеличиваем, только уменьшаем широкую сторону до 1280px
+          '-movflags +faststart'
+        ])
+        .audioCodec('aac')
+        .audioBitrate('96k')
+        .on('error', reject)
+        .on('end', resolve)
+        .save(outputPath);
+    });
+
+    const compressed = fs.readFileSync(outputPath);
+    console.log(`[compressVideo] ${(buffer.length / 1024 / 1024).toFixed(1)} МБ → ${(compressed.length / 1024 / 1024).toFixed(1)} МБ`);
+    // подстраховка: если почему-то стало больше — оставляем оригинал
+    return compressed.length > 0 && compressed.length < buffer.length ? compressed : buffer;
+  } catch (e) {
+    console.error('[compressVideo] Ошибка сжатия, загружаем оригинал без изменений:', e.message);
+    return buffer;
+  } finally {
+    try { fs.unlinkSync(inputPath); } catch (e) {}
+    try { fs.unlinkSync(outputPath); } catch (e) {}
+  }
+}
+
 async function uploadToYandexDisk(buffer, filename) {
   if (!YANDEX_OAUTH_TOKEN) {
     throw new Error('YANDEX_TOKEN не задан на сервере (переменные окружения)');
@@ -305,7 +355,14 @@ app.post('/api/workout', checkAuth, (req, res, next) => {
     if (req.files && req.files.length > 0 && key) {
       for (const file of req.files) {
         console.log(`Загрузка ${file.fieldname} на Яндекс Диск...`);
-        const { diskPath } = await uploadToYandexDisk(file.buffer, file.originalname);
+
+        let bufferToUpload = file.buffer;
+        if (file.fieldname === 'video') {
+          console.log(`Сжатие видео (${(file.buffer.length / 1024 / 1024).toFixed(1)} МБ)...`);
+          bufferToUpload = await compressVideoBuffer(file.buffer, file.originalname);
+        }
+
+        const { diskPath } = await uploadToYandexDisk(bufferToUpload, file.originalname);
 
         if (file.fieldname === 'video') {
           videoDiskPath = diskPath;
@@ -448,6 +505,6 @@ initStore().then(() => {
     }
   });
 
-  server.timeout = 300000;
-  server.keepAliveTimeout = 300000;
+  server.timeout = 600000;
+  server.keepAliveTimeout = 600000;
 });
