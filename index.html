@@ -778,12 +778,24 @@
                     }
                 }
 
-                video.addEventListener('loadedmetadata', () => {
-                    try { video.currentTime = Math.min(0.5, (video.duration || 1) / 2); }
-                    catch (e) { capture(); }
-                });
+                function attemptSeek() {
+                    if (captured || settled) return;
+                    try {
+                        const target = Math.min(0.5, (video.duration || 1) / 2);
+                        if (Math.abs(video.currentTime - target) < 0.01) {
+                            // уже на нужном месте — перемотка не даст нового события seeked
+                            capture();
+                        } else {
+                            video.currentTime = target;
+                        }
+                    } catch (e) {
+                        capture(); // перемотать не получилось — берём что есть, чем ничего
+                    }
+                }
+
+                video.addEventListener('loadedmetadata', attemptSeek);
+                video.addEventListener('loadeddata', attemptSeek); // подстраховка, если loadedmetadata не сработал
                 video.addEventListener('seeked', capture);
-                video.addEventListener('loadeddata', capture);
                 video.addEventListener('error', () => finish(null));
             });
         }
