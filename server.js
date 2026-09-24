@@ -179,8 +179,10 @@ async function axiosWithRetry(config, retries = 2) {
   try {
     return await axios({ timeout: 15000, family: 4, ...config });
   } catch (err) {
-    const retryable = ['ETIMEDOUT', 'ECONNRESET', 'ECONNABORTED', 'ENETUNREACH', 'EAI_AGAIN'].includes(err.code);
-    if (retryable && retries > 0) {
+    const networkRetryable = ['ETIMEDOUT', 'ECONNRESET', 'ECONNABORTED', 'ENETUNREACH', 'EAI_AGAIN'].includes(err.code);
+    // 5xx — это сбой на стороне Яндекса, обычно временный, тоже имеет смысл повторить
+    const serverRetryable = err.response && err.response.status >= 500;
+    if ((networkRetryable || serverRetryable) && retries > 0) {
       await new Promise((r) => setTimeout(r, 1500));
       return axiosWithRetry(config, retries - 1);
     }
