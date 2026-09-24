@@ -23,7 +23,15 @@ app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ limit: '20mb', extended: true }));
 app.use(cors());
 
-const storage = multer.memoryStorage();
+// Файлы пишутся сразу на диск, а не держатся целиком в RAM — иначе на бесплатном Render
+// (мало памяти) видео + его копия для ffmpeg вместе могли вызвать падение процесса по OOM.
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, os.tmpdir()),
+  filename: (req, file, cb) => {
+    const uniq = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    cb(null, `upload_${uniq}${path.extname(file.originalname) || ''}`);
+  }
+});
 const upload = multer({
   storage,
   limits: { fileSize: 100 * 1024 * 1024 }
@@ -185,28 +193,26 @@ async function axiosWithRetry(config, retries = 2) {
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // Сжатие видео перед загрузкой (чтобы не тащить на Диск исходники в 100+ МБ с телефона)
+// Работает с путём к файлу на диске — не грузит его целиком в память лишний раз.
 // ---------------------------------------------------------------------------
-const COMPRESS_SKIP_THRESHOLD = 15 * 1024 * 1024; // маленькие файлы не трогаем — не стоит тратить время
+const COMPRESS_SKIP_THRESHOLD = 15 * 1024 * 1024; // маленькие файлы не трогаем
 
-async function compressVideoBuffer(buffer, originalName) {
-  if (buffer.length < COMPRESS_SKIP_THRESHOLD) return buffer;
+async function compressVideoFile(inputPath, fileSize) {
+  if (fileSize < COMPRESS_SKIP_THRESHOLD) {
+    return { path: inputPath, size: fileSize, isNew: false };
+  }
 
-  const tmpDir = os.tmpdir();
-  const uniq = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const ext = path.extname(originalName) || '.mp4';
-  const inputPath = path.join(tmpDir, `in_${uniq}${ext}`);
-  const outputPath = path.join(tmpDir, `out_${uniq}.mp4`);
+  const outputPath = path.join(os.tmpdir(), `out_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.mp4`);
 
   try {
-    fs.writeFileSync(inputPath, buffer);
-
     await new Promise((resolve, reject) => {
       ffmpeg(inputPath)
         .videoCodec('libx264')
         .outputOptions([
-          '-crf 28',
-          '-preset veryfast',
-          "-vf scale='min(1280,iw)':-2", // не увеличиваем, только уменьшаем широкую сторону до 1280px
+          '-crf 30',
+          '-preset ultrafast', // минимум памяти/CPU — критично на бесплатном Render (мало RAM)
+          '-threads 1',
+          "-vf scale='min(960,iw)':-2", // не увеличиваем, только уменьшаем широкую сторону до 960px
           '-movflags +faststart'
         ])
         .audioCodec('aac')
@@ -216,20 +222,23 @@ async function compressVideoBuffer(buffer, originalName) {
         .save(outputPath);
     });
 
-    const compressed = fs.readFileSync(outputPath);
-    console.log(`[compressVideo] ${(buffer.length / 1024 / 1024).toFixed(1)} МБ → ${(compressed.length / 1024 / 1024).toFixed(1)} МБ`);
-    // подстраховка: если почему-то стало больше — оставляем оригинал
-    return compressed.length > 0 && compressed.length < buffer.length ? compressed : buffer;
+    const compressedSize = fs.statSync(outputPath).size;
+    console.log(`[compressVideo] ${(fileSize / 1024 / 1024).toFixed(1)} МБ → ${(compressedSize / 1024 / 1024).toFixed(1)} МБ`);
+
+    if (compressedSize > 0 && compressedSize < fileSize) {
+      return { path: outputPath, size: compressedSize, isNew: true };
+    }
+    // сжатие не помогло — используем оригинал, лишний файл подчищаем
+    try { fs.unlinkSync(outputPath); } catch (e) {}
+    return { path: inputPath, size: fileSize, isNew: false };
   } catch (e) {
     console.error('[compressVideo] Ошибка сжатия, загружаем оригинал без изменений:', e.message);
-    return buffer;
-  } finally {
-    try { fs.unlinkSync(inputPath); } catch (e) {}
-    try { fs.unlinkSync(outputPath); } catch (e) {}
+    try { fs.unlinkSync(outputPath); } catch (e2) {}
+    return { path: inputPath, size: fileSize, isNew: false };
   }
 }
 
-async function uploadToYandexDisk(buffer, filename) {
+async function uploadToYandexDisk(filePath, fileSize, filename) {
   if (!YANDEX_OAUTH_TOKEN) {
     throw new Error('YANDEX_TOKEN не задан на сервере (переменные окружения)');
   }
@@ -259,11 +268,15 @@ async function uploadToYandexDisk(buffer, filename) {
       }
 
       try {
+        // Новый поток чтения на каждую попытку — предыдущий, если был, уже "использован"
         await axiosWithRetry({
           method: 'put',
           url: uploadUrl,
-          data: buffer,
-          headers: { 'Content-Type': 'application/octet-stream' },
+          data: fs.createReadStream(filePath),
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'Content-Length': fileSize
+          },
           maxContentLength: Infinity,
           maxBodyLength: Infinity,
           timeout: 180000
@@ -347,6 +360,7 @@ app.post('/api/workout', checkAuth, (req, res, next) => {
     next();
   });
 }, async (req, res) => {
+  const tempFilesToClean = [];
   try {
     const key = req.body.key;
     let videoDiskPath = null;
@@ -354,15 +368,23 @@ app.post('/api/workout', checkAuth, (req, res, next) => {
 
     if (req.files && req.files.length > 0 && key) {
       for (const file of req.files) {
+        // multer.diskStorage уже сохранил файл на диск — чистим его в любом случае в конце
+        tempFilesToClean.push(file.path);
+
         console.log(`Загрузка ${file.fieldname} на Яндекс Диск...`);
 
-        let bufferToUpload = file.buffer;
+        let uploadPath = file.path;
+        let uploadSize = file.size;
+
         if (file.fieldname === 'video') {
-          console.log(`Сжатие видео (${(file.buffer.length / 1024 / 1024).toFixed(1)} МБ)...`);
-          bufferToUpload = await compressVideoBuffer(file.buffer, file.originalname);
+          console.log(`Сжатие видео (${(file.size / 1024 / 1024).toFixed(1)} МБ)...`);
+          const compressed = await compressVideoFile(file.path, file.size);
+          uploadPath = compressed.path;
+          uploadSize = compressed.size;
+          if (compressed.isNew) tempFilesToClean.push(compressed.path);
         }
 
-        const { diskPath } = await uploadToYandexDisk(bufferToUpload, file.originalname);
+        const { diskPath } = await uploadToYandexDisk(uploadPath, uploadSize, file.originalname);
 
         if (file.fieldname === 'video') {
           videoDiskPath = diskPath;
@@ -389,6 +411,11 @@ app.post('/api/workout', checkAuth, (req, res, next) => {
   } catch (error) {
     console.error('Ошибка при сохранении:', error.response?.data || error.message);
     res.status(500).json({ success: false, error: error.message });
+  } finally {
+    // Временные файлы (исходник от multer + сжатую копию) подчищаем всегда, успех это был или нет
+    for (const p of tempFilesToClean) {
+      try { fs.unlinkSync(p); } catch (e) {}
+    }
   }
 });
 
