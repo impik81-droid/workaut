@@ -369,33 +369,106 @@
             } catch (e) {}
         });
 
+        let dataLoaded = false;      // пока данные с сервера не загружены, НИЧЕГО не отправляем (иначе затрём облако пустыми данными)
+        let syncInFlight = false;    // идёт ли сейчас отправка
+        let syncDirty = false;       // появились новые изменения, пока шла отправка
+        let syncTimer = null;
+        let syncWaiters = [];
+        let syncErrorShown = false;
+
+        function normalizeCloudData(d) {
+            d = d || {};
+            if (!d.videos) d.videos = {};
+            if (!d.dates) d.dates = {};
+            if (!d.templates) d.templates = {};
+            if (!d.comments) d.comments = {};
+            return d;
+        }
+
+        async function fetchCloudData() {
+            const response = await fetch(`${SERVER_URL}/api/data`, { headers: { 'x-app-token': APP_TOKEN } });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return normalizeCloudData(await response.json());
+        }
+
         async function loadCloudData() {
-            try {
-                const response = await fetch(`${SERVER_URL}/api/data`, { headers: { 'x-app-token': APP_TOKEN } });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                cloudData = await response.json();
-                if (!cloudData.videos) cloudData.videos = {};
-                if (!cloudData.dates) cloudData.dates = {};
-                if (!cloudData.templates) cloudData.templates = {};
-                if (!cloudData.comments) cloudData.comments = {};
-            } catch (e) {
-                console.log("Ошибка загрузки с сервера", e);
+            // Бесплатный Render "засыпает" и просыпается до минуты — пробуем несколько раз
+            for (let attempt = 0; attempt < 4 && !dataLoaded; attempt++) {
+                try {
+                    cloudData = await fetchCloudData();
+                    dataLoaded = true;
+                } catch (e) {
+                    console.log("Ошибка загрузки с сервера", e);
+                    await new Promise((r) => setTimeout(r, 3000));
+                }
+            }
+            if (!dataLoaded) {
+                alert("Не удалось загрузить данные с сервера. Чтобы ничего не потерять, сохранение отключено — обновите страницу и попробуйте снова.");
             }
             initApp();
         }
 
-        async function syncWithServer() {
-            try {
-                const response = await fetch(`${SERVER_URL}/api/data`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'x-app-token': APP_TOKEN },
-                    body: JSON.stringify(cloudData)
-                });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            } catch (e) {
-                console.log("Ошибка синхронизации", e);
-            }
+        // Отправка на сервер: с задержкой (объединяет быстрые правки), по одной за раз
+        // (чтобы старая версия не приехала позже новой) и с повторами при сбое сети.
+        function syncWithServer() {
+            return new Promise((resolve) => {
+                syncWaiters.push(resolve);
+                clearTimeout(syncTimer);
+                syncTimer = setTimeout(runSync, 400);
+            });
         }
+
+        async function runSync() {
+            clearTimeout(syncTimer);
+            syncTimer = null;
+            if (syncInFlight) { syncDirty = true; return; }
+            const waiters = syncWaiters;
+            syncWaiters = [];
+            if (!dataLoaded) { waiters.forEach((r) => r(false)); return; }
+
+            syncInFlight = true;
+            let ok = false;
+            for (let attempt = 0; attempt < 3 && !ok; attempt++) {
+                try {
+                    const response = await fetch(`${SERVER_URL}/api/data`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'x-app-token': APP_TOKEN },
+                        body: JSON.stringify(cloudData)  // всегда самая свежая версия на момент отправки
+                    });
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    ok = true;
+                } catch (e) {
+                    console.log("Ошибка синхронизации", e);
+                    await new Promise((r) => setTimeout(r, 1500));
+                }
+            }
+            syncInFlight = false;
+            if (!ok && !syncErrorShown) {
+                syncErrorShown = true;
+                alert("Не удалось сохранить данные на сервер (нет связи?). Не закрывайте приложение — попробуйте изменить любое значение ещё раз.");
+            }
+            if (ok) syncErrorShown = false;
+            waiters.forEach((r) => r(ok));
+            if (syncDirty || syncWaiters.length) { syncDirty = false; runSync(); }
+        }
+
+        document.addEventListener('visibilitychange', async () => {
+            if (!dataLoaded) return;
+            if (document.visibilityState === 'hidden') {
+                // Уходим из приложения — отправляем накопленное немедленно
+                if (syncTimer) runSync();
+            } else {
+                // Вернулись — подтягиваем свежее (вдруг данные менялись с другого устройства),
+                // но только если у нас нет неотправленных правок
+                if (syncTimer || syncInFlight || syncDirty) return;
+                try {
+                    const fresh = await fetchCloudData();
+                    if (syncTimer || syncInFlight || syncDirty) return;
+                    cloudData = fresh;
+                    renderWorkouts();
+                } catch (e) {}
+            }
+        });
 
         const programData = [
             { id: "day1", name: "День 1 (Квадры)", color: "#FFB238", exercises: [
