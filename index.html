@@ -750,6 +750,7 @@
                     settled = true;
                     clearTimeout(timeoutId);
                     try { URL.revokeObjectURL(video.src); } catch (e) {}
+                    try { video.remove(); } catch (e) {}
                     resolve(result);
                 };
 
@@ -762,6 +763,15 @@
                 video.preload = 'auto';
                 video.muted = true;
                 video.playsInline = true;
+                video.setAttribute('playsinline', ''); // для старых iOS браузеров нужен именно атрибут, не только свойство
+                // Некоторые мобильные браузеры не декодируют кадры видео, если элемент не в DOM —
+                // прячем его за пределами экрана, но оставляем реально отрендеренным.
+                video.style.position = 'fixed';
+                video.style.left = '-9999px';
+                video.style.top = '0';
+                video.style.width = '2px';
+                video.style.height = '2px';
+                document.body.appendChild(video);
                 video.src = URL.createObjectURL(file);
 
                 function capture() {
