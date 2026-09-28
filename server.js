@@ -455,11 +455,36 @@ app.get('/api/stream/:type/:key/:id?', async (req, res) => {
       headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
     });
 
-    // Раньше здесь файл прокачивался через наш сервер (скачать с Яндекса -> переслать браузеру) —
-    // это двойной путь и лишняя нагрузка на бесплатный Render, отсюда медленная загрузка.
-    // <video>/<img> не используют fetch(), поэтому CORS тут не мешает — просто редиректим
-    // браузер прямо на Яндекс, он скачает файл напрямую, в один переход.
-    return res.redirect(302, yaRes.data.href);
+    // Проксируем файл через наш сервер: редирект на Яндекс на iPhone ломает воспроизведение <video>.
+    // Обязательно пробрасываем Range — iOS Safari запрашивает видео кусками и без 206-ответа не играет.
+    const upstreamHeaders = {};
+    if (req.headers.range) upstreamHeaders.Range = req.headers.range;
+
+    const response = await axiosWithRetry({
+      method: 'get',
+      url: yaRes.data.href,
+      responseType: 'stream',
+      headers: upstreamHeaders,
+      timeout: 60000,
+      validateStatus: (st) => st === 200 || st === 206
+    });
+
+    res.status(response.status);
+    let contentType = response.headers['content-type'];
+    if (!contentType || contentType === 'application/octet-stream') {
+      contentType = type === 'video' ? 'video/mp4' : 'image/jpeg';
+    }
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Accept-Ranges', 'bytes');
+    if (response.headers['content-length']) res.setHeader('Content-Length', response.headers['content-length']);
+    if (response.headers['content-range']) res.setHeader('Content-Range', response.headers['content-range']);
+
+    response.data.on('error', (err) => {
+      console.error('Ошибка передачи потока:', err.message);
+      res.end();
+    });
+    req.on('close', () => response.data.destroy());
+    response.data.pipe(res);
   } catch (error) {
     console.error('Ошибка в эндпоинте стриминга:', error.response?.data || error.message);
     if (error.response && error.response.status === 404) {
