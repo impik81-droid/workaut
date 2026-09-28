@@ -455,41 +455,17 @@ app.get('/api/stream/:type/:key/:id?', async (req, res) => {
       headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
     });
 
-    const downloadUrl = yaRes.data.href;
-
-    const response = await axiosWithRetry({
-      method: 'get',
-      url: downloadUrl,
-      responseType: 'stream',
-      timeout: 60000
-    });
-
-    if (response.headers['content-type']) {
-      res.setHeader('Content-Type', response.headers['content-type']);
-    }
-    if (response.headers['content-length']) {
-      res.setHeader('Content-Length', response.headers['content-length']);
-    }
-
-    response.data.on('error', (err) => {
-      console.error('Ошибка передачи потока (stream error):', err.message);
-      if (!res.headersSent) {
-        res.status(500).send('Ошибка передачи потока');
-      } else {
-        res.end();
-      }
-    });
-
-    response.data.pipe(res);
-
+    // Раньше здесь файл прокачивался через наш сервер (скачать с Яндекса -> переслать браузеру) —
+    // это двойной путь и лишняя нагрузка на бесплатный Render, отсюда медленная загрузка.
+    // <video>/<img> не используют fetch(), поэтому CORS тут не мешает — просто редиректим
+    // браузер прямо на Яндекс, он скачает файл напрямую, в один переход.
+    return res.redirect(302, yaRes.data.href);
   } catch (error) {
     console.error('Ошибка в эндпоинте стриминга:', error.response?.data || error.message);
-    if (!res.headersSent) {
-      if (error.response && error.response.status === 404) {
-        return res.status(404).json({ error: 'File not found on Yandex Disk' });
-      }
-      res.status(500).json({ error: 'Не удалось загрузить медиафайл' });
+    if (error.response && error.response.status === 404) {
+      return res.status(404).json({ error: 'File not found on Yandex Disk' });
     }
+    res.status(500).json({ error: 'Не удалось получить ссылку на медиафайл' });
   }
 });
 
