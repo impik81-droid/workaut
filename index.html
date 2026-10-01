@@ -576,8 +576,9 @@
 
             const entry = ensureExerciseEntry(exIndex);
             entry._count = currentCount + 1;
-            // новый подход стартует пустым (можно опереться на последний введённый вес вручную)
-            entry[`set_${currentCount}`] = { weight: '', reps: '', checked: false };
+            // Подставляем последние введённые для этого подхода вес/повторы (как и у остальных подходов)
+            const last = getLastData(activeProgramId, exIndex, currentCount);
+            entry[`set_${currentCount}`] = { weight: last.weight || '', reps: last.reps || '', checked: false };
 
             syncWithServer();
             renderWorkouts();
