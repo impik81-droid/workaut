@@ -404,8 +404,42 @@
             }
             if (!dataLoaded) {
                 alert("Не удалось загрузить данные с сервера. Чтобы ничего не потерять, сохранение отключено — обновите страницу и попробуйте снова.");
+            } else {
+                backfillTemplatesFromHistory();
+                syncWithServer(); // сохраняем досчитанные шаблоны на сервер, не дожидаясь следующей правки
             }
             initApp();
+        }
+
+        // templates заполняется только когда пользователь ЗАНОВО вводит значение (см. updateData) —
+        // то есть работает только вперёд с момента появления этой функции. Чтобы подставлялись и
+        // значения, введённые раньше, один раз при загрузке досчитываем шаблоны по всей истории:
+        // идём по датам от старых к новым и запоминаем последний непустой вес/повторы на каждый подход.
+        function backfillTemplatesFromHistory() {
+            const dateKeys = Object.keys(cloudData.dates).sort(); // "YYYY-MM-DD" сортируется как строка правильно
+            dateKeys.forEach((dateKey) => {
+                const dayEntry = cloudData.dates[dateKey];
+                Object.keys(dayEntry).forEach((progId) => {
+                    if (progId === 'programId') return;
+                    const progData = dayEntry[progId];
+                    if (!progData || typeof progData !== 'object') return;
+                    Object.keys(progData).forEach((exIndex) => {
+                        const exData = progData[exIndex];
+                        if (!exData || typeof exData !== 'object') return;
+                        Object.keys(exData).forEach((setKey) => {
+                            if (!setKey.startsWith('set_')) return;
+                            const setIndex = setKey.slice(4);
+                            const setData = exData[setKey];
+                            if (!setData || (!setData.weight && !setData.reps)) return;
+                            if (!cloudData.templates[progId]) cloudData.templates[progId] = {};
+                            if (!cloudData.templates[progId][exIndex]) cloudData.templates[progId][exIndex] = {};
+                            // Идём по датам от старых к новым, так что более поздняя запись
+                            // всегда перезаписывает более раннюю — в итоге остаётся самая свежая.
+                            cloudData.templates[progId][exIndex][setIndex] = { weight: setData.weight || '', reps: setData.reps || '' };
+                        });
+                    });
+                });
+            });
         }
 
         // Отправка на сервер: с задержкой (объединяет быстрые правки), по одной за раз
