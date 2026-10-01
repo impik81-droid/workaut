@@ -61,20 +61,10 @@ function generateVideoId() {
   return `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function loadLocalStore() {
-  try {
-    const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-    const parsed = JSON.parse(raw);
-    return {
-      cloudData: parsed.cloudData || emptyStore().cloudData,
-      videoPaths: parsed.videoPaths || {}
-    };
-  } catch (e) {
-    return emptyStore();
-  }
-}
-
 function saveLocalStore() {
+  // Это только диагностический кэш на диске Render. ВАЖНО: диск Render эфемерный и обнуляется
+  // при каждом перезапуске/передеплое — полагаться на этот файл как на единственный источник
+  // данных нельзя. Настоящее хранилище — только Яндекс.Диск.
   fs.writeFile(DATA_FILE, JSON.stringify(store, null, 2), (err) => {
     if (err) console.error('Ошибка сохранения локального кэша data.json:', err);
   });
@@ -94,8 +84,12 @@ async function runWithDiskLock(fn) {
   }
 }
 
+// Возвращает { ok, data, notFound }.
+// ok=false означает НАСТОЯЩИЙ сбой (сеть/авторизация/Яндекс недоступен) — в этом случае
+// store НЕЛЬЗЯ инициализировать пустым, иначе первое же сохранение сотрёт реальные данные.
+// notFound=true — это легитимный случай "файла ещё никогда не было" (самый первый запуск).
 async function downloadStoreFromYandex() {
-  if (!YANDEX_OAUTH_TOKEN) return null;
+  if (!YANDEX_OAUTH_TOKEN) return { ok: false, data: null };
   return await runWithDiskLock(async () => {
     try {
       const linkRes = await axios.get(
@@ -108,18 +102,54 @@ async function downloadStoreFromYandex() {
       const fileRes = await axios.get(linkRes.data.href);
       const data = fileRes.data;
       return {
-        cloudData: data.cloudData || emptyStore().cloudData,
-        videoPaths: data.videoPaths || {}
+        ok: true,
+        data: {
+          cloudData: data.cloudData || emptyStore().cloudData,
+          videoPaths: data.videoPaths || {}
+        }
       };
     } catch (e) {
-      console.log('Не удалось загрузить data.json с Яндекс.Диска (возможно, его ещё нет):', e.response?.status || e.message);
-      return null;
+      const status = e.response?.status;
+      if (status === 404) {
+        console.log('Файл app-data.json на Яндекс.Диске не найден — похоже, это первый запуск.');
+        return { ok: true, data: null, notFound: true };
+      }
+      console.error('ОШИБКА загрузки data.json с Яндекс.Диска:', status || e.message);
+      return { ok: false, data: null };
+    }
+  });
+}
+
+// Раз в календарный день перед сохранением кладём копию текущих данных в /workaut/backups/,
+// чтобы при любом сбое (включая баги в этом коде) была точка восстановления за последние дни.
+let lastBackupDateKey = null;
+async function backupStoreIfNeeded() {
+  if (!YANDEX_OAUTH_TOKEN) return;
+  const todayKey = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  if (todayKey === lastBackupDateKey) return;
+  await runWithDiskLock(async () => {
+    try {
+      const uploadUrlRes = await axios.get(
+        'https://cloud-api.yandex.net/v1/disk/resources/upload',
+        {
+          params: { path: `/workaut/backups/app-data-${todayKey}.json`, overwrite: true },
+          headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` }
+        }
+      );
+      await axios.put(uploadUrlRes.data.href, JSON.stringify(store), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+      lastBackupDateKey = todayKey;
+      console.log(`Создан дневной бэкап: app-data-${todayKey}.json`);
+    } catch (e) {
+      console.error('Не удалось создать дневной бэкап:', e.response?.data || e.message);
     }
   });
 }
 
 async function uploadStoreToYandex() {
   if (!YANDEX_OAUTH_TOKEN) return;
+  await backupStoreIfNeeded();
   await runWithDiskLock(async () => {
     try {
       const uploadUrlRes = await axios.get(
@@ -140,16 +170,54 @@ async function uploadStoreToYandex() {
 
 let store = emptyStore();
 let saveTimeout = null;
+// Пока false — сервер ОТКАЗЫВАЕТСЯ читать/писать данные вместо того, чтобы молча
+// подставить пустое хранилище и рискнуть затереть реальные данные на Диске.
+let storeReady = false;
 
 async function initStore() {
-  const remote = await downloadStoreFromYandex();
-  if (remote) {
-    store = remote;
-    console.log('Данные загружены с Яндекс.Диска.');
-  } else {
-    store = loadLocalStore();
-    console.log('Данные загружены из локального кэша (или созданы пустыми).');
+  let result = await downloadStoreFromYandex();
+  let attempt = 0;
+  while (!result.ok && attempt < 6) {
+    attempt++;
+    console.warn(`Не удалось загрузить данные с Яндекс.Диска, попытка ${attempt}/6 через 5 секунд...`);
+    await new Promise((r) => setTimeout(r, 5000));
+    result = await downloadStoreFromYandex();
   }
+
+  if (result.ok) {
+    store = result.data || emptyStore();
+    storeReady = true;
+    console.log(result.notFound ? 'Данные на Диске не найдены — начинаем с чистого листа.' : 'Данные загружены с Яндекс.Диска.');
+    saveLocalStore();
+  } else {
+    console.error('КРИТИЧНО: не удалось загрузить данные с Яндекс.Диска после нескольких попыток. Чтение/сохранение данных отключено — сервер будет пытаться переподключиться в фоне.');
+    // Продолжаем пытаться в фоне, не блокируя остальной сервер (видео и т.д. могут работать)
+    retryInitStoreInBackground();
+  }
+}
+
+function retryInitStoreInBackground() {
+  const retryTimer = setInterval(async () => {
+    if (storeReady) { clearInterval(retryTimer); return; }
+    console.log('Повторная попытка подключения к Яндекс.Диску...');
+    const result = await downloadStoreFromYandex();
+    if (result.ok) {
+      store = result.data || emptyStore();
+      storeReady = true;
+      console.log('Переподключение удалось — данные с Яндекс.Диска загружены.');
+      saveLocalStore();
+      clearInterval(retryTimer);
+    }
+  }, 30000);
+}
+
+function requireStoreReady(req, res, next) {
+  if (!storeReady) {
+    return res.status(503).json({
+      error: 'Хранилище временно недоступно (не удалось связаться с Яндекс.Диском). Данные не читаются и не сохраняются, чтобы ничего не потерять. Подождите минуту и попробуйте снова.'
+    });
+  }
+  next();
 }
 
 function saveStore() {
@@ -340,17 +408,30 @@ async function deleteFromYandexDisk(pathOnDisk) {
 // ---------------------------------------------------------------------------
 // Роуты приложения
 // ---------------------------------------------------------------------------
-app.get('/api/data', checkAuth, (req, res) => {
+app.get('/api/data', checkAuth, requireStoreReady, (req, res) => {
   res.status(200).json(store.cloudData);
 });
 
-app.post('/api/data', checkAuth, (req, res) => {
-  store.cloudData = req.body;
+app.post('/api/data', checkAuth, requireStoreReady, (req, res) => {
+  const incoming = req.body || {};
+  const incomingDateCount = incoming.dates ? Object.keys(incoming.dates).length : 0;
+  const currentDateCount = store.cloudData?.dates ? Object.keys(store.cloudData.dates).length : 0;
+
+  // Подозрительный случай: было много дней с записями, а пришло почти пусто — вероятно,
+  // клиент прислал данные до того, как сам успел их загрузить. Не отказываем (мало ли,
+  // человек правда всё удалил), но заранее бэкапим текущее состояние и громко логируем,
+  // чтобы при необходимости можно было восстановить из /workaut/backups/.
+  if (currentDateCount >= 3 && incomingDateCount === 0) {
+    console.warn(`[Подозрительное сохранение] Было ${currentDateCount} дней с записями, пришло 0. Делаю внеочередной бэкап перед перезаписью.`);
+    lastBackupDateKey = null; // форсируем бэкап прямо сейчас, не дожидаясь нового календарного дня
+  }
+
+  store.cloudData = incoming;
   saveStore();
   res.status(200).json({ success: true });
 });
 
-app.post('/api/workout', checkAuth, (req, res, next) => {
+app.post('/api/workout', checkAuth, requireStoreReady, (req, res, next) => {
   upload.any()(req, res, (err) => {
     if (err) {
       console.error('[Multer] Ошибка приёма файла:', err.message);
@@ -432,6 +513,9 @@ app.get('/api/stream/:type/:key/:id?', async (req, res) => {
     if (token !== APP_TOKEN) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
+    if (!storeReady) {
+      return res.status(503).json({ error: 'Хранилище временно недоступно, попробуйте через минуту' });
+    }
 
     const entries = getVideoEntries(decodedKey);
     if (entries.length === 0) {
@@ -494,7 +578,7 @@ app.get('/api/stream/:type/:key/:id?', async (req, res) => {
   }
 });
 
-app.post('/api/delete-video', checkAuth, async (req, res) => {
+app.post('/api/delete-video', checkAuth, requireStoreReady, async (req, res) => {
   try {
     const { key, id } = req.body;
     if (!key) {
