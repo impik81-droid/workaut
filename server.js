@@ -120,6 +120,27 @@ async function downloadStoreFromYandex() {
   });
 }
 
+// Яндекс.Диск не создаёт родительскую папку сам при загрузке файла в неё — нужно явно
+// создать её один раз заранее (409 "уже существует" — это нормально, игнорируем).
+let backupsFolderReady = false;
+async function ensureBackupsFolder() {
+  if (backupsFolderReady) return;
+  try {
+    await axios.put(
+      'https://cloud-api.yandex.net/v1/disk/resources',
+      null,
+      { params: { path: '/workaut/backups' }, headers: { Authorization: `OAuth ${YANDEX_OAUTH_TOKEN}` } }
+    );
+    backupsFolderReady = true;
+  } catch (e) {
+    if (e.response && e.response.status === 409) {
+      backupsFolderReady = true; // папка уже есть
+    } else {
+      console.error('Не удалось создать папку /workaut/backups:', e.response?.data || e.message);
+    }
+  }
+}
+
 // Раз в календарный день перед сохранением кладём копию текущих данных в /workaut/backups/,
 // чтобы при любом сбое (включая баги в этом коде) была точка восстановления за последние дни.
 let lastBackupDateKey = null;
@@ -127,6 +148,7 @@ async function backupStoreIfNeeded() {
   if (!YANDEX_OAUTH_TOKEN) return;
   const todayKey = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
   if (todayKey === lastBackupDateKey) return;
+  await ensureBackupsFolder();
   await runWithDiskLock(async () => {
     try {
       const uploadUrlRes = await axios.get(
