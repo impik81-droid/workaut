@@ -406,7 +406,8 @@
                 alert("Не удалось загрузить данные с сервера. Чтобы ничего не потерять, сохранение отключено — обновите страницу и попробуйте снова.");
             } else {
                 backfillTemplatesFromHistory();
-                syncWithServer(); // сохраняем досчитанные шаблоны на сервер, не дожидаясь следующей правки
+                cleanCheckedFromTemplates();
+                syncWithServer(); // сохраняем досчитанные/очищенные шаблоны на сервер, не дожидаясь следующей правки
             }
             initApp();
         }
@@ -415,6 +416,19 @@
         // то есть работает только вперёд с момента появления этой функции. Чтобы подставлялись и
         // значения, введённые раньше, один раз при загрузке досчитываем шаблоны по всей истории:
         // идём по датам от старых к новым и запоминаем последний непустой вес/повторы на каждый подход.
+        // Одноразовая чистка: из-за старого бага (см. getLastData) поле "checked" могло случайно
+        // "прилипнуть" к шаблонам — а в шаблоне ему в принципе не место (это памятка о дне, а не
+        // о конкретной отметке "выполнено"). Просто вычищаем его отовсюду из templates.
+        function cleanCheckedFromTemplates() {
+            Object.values(cloudData.templates).forEach((prog) => {
+                Object.values(prog).forEach((ex) => {
+                    Object.values(ex).forEach((setTpl) => {
+                        if (setTpl && typeof setTpl === 'object' && 'checked' in setTpl) delete setTpl.checked;
+                    });
+                });
+            });
+        }
+
         function backfillTemplatesFromHistory() {
             const dateKeys = Object.keys(cloudData.dates).sort(); // "YYYY-MM-DD" сортируется как строка правильно
             dateKeys.forEach((dateKey) => {
@@ -580,9 +594,13 @@
         }
 
         function getLastData(progId, exIndex, setIndex) {
-            if (cloudData.templates[progId] && cloudData.templates[progId][exIndex] && cloudData.templates[progId][exIndex][setIndex]) {
-                return cloudData.templates[progId][exIndex][setIndex];
-            }
+            const tpl = cloudData.templates[progId] && cloudData.templates[progId][exIndex] && cloudData.templates[progId][exIndex][setIndex];
+            // ВАЖНО: всегда возвращаем НОВУЮ копию, а не ссылку на сам объект шаблона. Если отдать
+            // ссылку, а её потом (например, в removeSet) положат прямо в данные конкретного дня,
+            // запись дня и общий шаблон станут одним и тем же объектом в памяти — и тогда обычная
+            // галочка «подход выполнен» будет случайно прописываться в шаблон и всплывать на всех
+            // последующих днях, даже без ввода веса/повторов.
+            if (tpl) return { weight: tpl.weight || '', reps: tpl.reps || '', checked: false };
             return { weight: '', reps: '', checked: false };
         }
 
